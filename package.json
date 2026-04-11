@@ -1,0 +1,35 @@
+{
+  "name": "@somewhere-tech/sdk",
+  "version": "0.1.0",
+  "description": "Official JavaScript/TypeScript SDK for the somewhere.tech platform API.",
+  "keywords": ["somewhere", "somewhere.tech", "backend", "sdk", "d1", "r2", "cloudflare"],
+  "homepage": "https://somewhere.tech",
+  "repository": { "type": "git", "url": "https://github.com/somewhere-tech/somewhere-sdk-js.git" },
+  "license": "MIT",
+  "author": "somewhere.tech",
+  "type": "module",
+  "main": "./dist/cjs/index.cjs",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.cjs"
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "npm run build:esm && npm run build:cjs && npm run build:types",
+    "build:esm": "tsc -p tsconfig.esm.json && node -e \"require('fs').writeFileSync('dist/esm/package.json','{\\\"type\\\":\\\"module\\\"}')\"",
+    "build:cjs": "tsc -p tsconfig.cjs.json && node -e \"require('fs').writeFileSync('dist/cjs/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && node -e \"require('fs').renameSync('dist/cjs/index.js','dist/cjs/index.cjs')\"",
+    "build:types": "tsc -p tsconfig.types.json",
+    "clean": "rm -rf dist",
+    "test": "node --loader ts-node/esm test/basic.test.ts",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "engines": { "node": ">=18" },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}
