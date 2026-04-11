@@ -1,20 +1,7 @@
-/**
- * Smoke test: exercises the full create → deploy → query → cleanup loop
- * against the live api.somewhere.tech API.
- *
- * Run with:
- *   SMT_KEY=smt_... npm test
- *
- * Skipped if SMT_KEY isn't set, so CI on a clean checkout stays green.
- */
-// Test runs against the built output (run `npm run build` first).
-// We pull runtime values from dist/esm and types from src so the
-// instanceof narrow on `SomewhereError` works at typecheck time.
-import type * as SdkTypes from '../src/index.js';
-// @ts-expect-error — relative path to built JS, no matching .d.ts at that location.
-import * as SdkRuntime from '../dist/esm/index.js';
-const Somewhere = SdkRuntime.Somewhere as unknown as typeof SdkTypes.Somewhere;
-const SomewhereError = SdkRuntime.SomewhereError as unknown as typeof SdkTypes.SomewhereError;
+// Runtime test shim — plain JS, runs against the built ESM output.
+// `basic.test.ts` is the typed source of truth; this file exists so
+// `npm test` can execute cold without a TS loader.
+const { Somewhere, SomewhereError } = globalThis.__sw;
 
 const key = process.env.SMT_KEY;
 if (!key) {
@@ -52,7 +39,7 @@ async function main() {
     );
 
     console.log('→ reading rows');
-    const result = await sw.db.query<{ id: number; body: string }>(
+    const result = await sw.db.query(
       'SELECT id, body FROM notes ORDER BY id DESC LIMIT 5',
       [],
       project.id,
@@ -62,14 +49,12 @@ async function main() {
     console.log('→ deploying a static file');
     const deployResult = await sw.deploy({
       projectId: project.id,
-      files: {
-        'index.html': '<h1>hello from the sdk smoke test</h1>',
-      },
+      files: { 'index.html': '<h1>hello from the sdk smoke test</h1>' },
     });
     console.log('  deployed to', deployResult.url);
 
     console.log('✅ smoke test passed');
-  } catch (err: unknown) {
+  } catch (err) {
     if (err instanceof SomewhereError) {
       console.error(
         `❌ API error [${err.code}] ${err.message} (HTTP ${err.statusCode})`,

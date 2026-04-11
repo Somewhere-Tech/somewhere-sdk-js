@@ -25,11 +25,12 @@
     "build:cjs": "tsc -p tsconfig.cjs.json && node -e \"require('fs').writeFileSync('dist/cjs/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && node -e \"require('fs').renameSync('dist/cjs/index.js','dist/cjs/index.cjs')\"",
     "build:types": "tsc -p tsconfig.types.json",
     "clean": "rm -rf dist",
-    "test": "node --loader ts-node/esm test/basic.test.ts",
+    "test": "npm run build && tsc -p tsconfig.test.json && node --input-type=module -e \"import('./dist/esm/index.js').then(async (m) => { globalThis.__sw = m; await import('./test/run-basic.mjs'); })\"",
     "prepublishOnly": "npm run clean && npm run build"
   },
   "engines": { "node": ">=18" },
   "devDependencies": {
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0"
   }
 }
