@@ -28,8 +28,27 @@ export class ProjectsResource {
     return this.client.call<Project>('GET', `/projects/${encodeURIComponent(id)}`);
   }
 
-  delete(id: string): Promise<{ deleted: true }> {
-    return this.client.call('DELETE', `/projects/${encodeURIComponent(id)}`);
+  /**
+   * Request a project-delete confirmation code. The platform emails a
+   * 6-digit code to the owner that expires in 10 minutes. Pass that code
+   * to {@link delete} to actually destroy the project.
+   */
+  requestDelete(id: string): Promise<{ code_sent: true; expires_in_seconds: number }> {
+    return this.client.call('POST', `/projects/${encodeURIComponent(id)}/request-delete`);
+  }
+
+  /**
+   * Cascade-delete a project. Requires a confirmation code from
+   * {@link requestDelete}. Destroys D1 database, R2 files, KV subdomain
+   * record, Workers-for-Platforms scripts, and all child rows in one shot.
+   */
+  delete(
+    id: string,
+    code: string,
+  ): Promise<{ deleted: true; cleanup: Record<string, unknown> }> {
+    return this.client.call('DELETE', `/projects/${encodeURIComponent(id)}`, {
+      body: { code },
+    });
   }
 
   undeploy(id: string): Promise<{ status: 'draft'; slug: string }> {
