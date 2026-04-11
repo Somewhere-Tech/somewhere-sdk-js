@@ -1,35 +1,22 @@
 /**
- * Full-surface live test for @somewhere-tech/sdk.
+ * Live full-surface test for @somewhere-tech/sdk after the dominant-player
+ * rewrite. Exercises:
  *
- * Exercises every SDK method that's feasible against api.somewhere.tech:
- *   - projects.create / list / get / rename / deploys / undeploy /
- *     archive / unarchive / delete
- *   - deploy / deploy.status / promote / promote.rollback
- *   - db.migrate / query / tables / schema
- *   - storage.put / get / delete / list
- *   - fs.write / read (file + directory) / stat / versions / move / copy / delete
- *   - auth.signup / login / me / forgot / users / logout
- *   - email.send (quota-gated)
- *   - ai.complete (activation-gated — expected PAID_API_NOT_ACTIVATED)
- *   - jobs.create / status / list / cancel / progress
- *   - cron.create / list / update / delete
- *   - queue.push
- *   - logs.write / read
- *   - env.set / list / delete
- *   - domains.add / verify / list / delete (BYO, verification will fail)
- *   - preview.invite / revoke / viewers
- *   - feedback.submit / list
- *   - billing.status / checkout (no-op portal for non-billing admins)
- *   - usage.get / summary
+ *   - sw.from(table).select/insert/update/upsert/delete + filters
+ *   - sw.storage.from(bucket).upload/download/list/remove/getPublicUrl
+ *   - sw.auth.signUp/signInWithPassword/getUser/getSession/updateUser/
+ *     resetPasswordForEmail/signOut + setSession rehydration
+ *   - sw.emails.send
+ *   - sw.chat.completions.create
  *
- * Cleans up the test project and any side resources on exit. Any unexpected
- * SomewhereError is recorded and continues so we get a full report.
- *
- * Run with:
- *   SMT_KEY=smt_... node test/live-full-surface.mjs
+ * A real smt_ key is required. The test creates a scratch project
+ * directly against the HTTP API (since `sw.projects.*` no longer exists),
+ * runs the full SDK surface inside that project, then deletes the
+ * project via the two-step confirmation flow (reading the code from D1
+ * via the CF global key — same mechanism as before).
  */
 import { Somewhere, SomewhereError } from '../dist/esm/index.js';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 const key = process.env.SMT_KEY;
 if (!key) {
@@ -37,30 +24,20 @@ if (!key) {
   process.exit(2);
 }
 
-const sw = new Somewhere({ key });
+const BASE_URL = 'https://api.somewhere.tech/v1';
 const suffix = Math.random().toString(36).slice(2, 8);
-const subdomain = `sdk-live-${suffix}`;
-
-/**
- * Every step is one assertion against a live endpoint. The test stops on
- * a fatal throw (unexpected JS error) but continues on SomewhereError so
- * we get a full matrix of which endpoints pass and which fail.
- *
- * `expect` is one of:
- *   - 'ok'          — the call must succeed
- *   - 'ok|<code>'   — success OR that specific error code is acceptable
- *     (e.g. 'ok|PAID_API_NOT_ACTIVATED' for AI endpoints that need activation)
- */
+const subdomain = `sdk-dpr-${suffix}`;
 const results = [];
+let projectId;
+
 async function step(name, expect, fn) {
   const row = { name, expect, outcome: 'pending', detail: '' };
   results.push(row);
   try {
     const data = await fn();
     row.outcome = 'pass';
-    const preview = previewJson(data);
-    row.detail = preview;
-    console.log(`  ✅ ${name} — ${preview}`);
+    row.detail = previewJson(data);
+    console.log(`  ✅ ${name} — ${row.detail}`);
     return data;
   } catch (err) {
     if (err instanceof SomewhereError) {
@@ -92,489 +69,72 @@ function previewJson(v) {
   }
 }
 
-let projectId;
-let jobId;
-let cronId;
-let appUserJwt;
-let appUserSessionToken;
-
-async function main() {
-  console.log(`\n=== SDK LIVE SURFACE TEST (${suffix}) ===\n`);
-
-  // ── Account-level endpoints ──────────────────────────────────────
-  console.log('\n## Billing / usage / auth account');
-  await step('billing.status', 'ok', () => sw.billing.status());
-  await step('usage.summary', 'ok', () => sw.usage.summary());
-
-  // ── Project lifecycle ────────────────────────────────────────────
-  console.log('\n## Projects');
-  const created = await step('projects.create', 'ok', () =>
-    sw.projects.create({
-      name: `SDK Live ${suffix}`,
-      subdomain,
-      description: 'Full-surface SDK live test',
-    }),
-  );
-  if (!created?.id) {
-    console.error('fatal: project creation failed, cannot continue');
-    await dumpResults();
-    process.exit(1);
-  }
-  projectId = created.id;
-  console.log(`  project id: ${projectId}`);
-
-  await step('projects.list', 'ok', () => sw.projects.list());
-  await step('projects.get', 'ok', () => sw.projects.get(projectId));
-  await step('projects.deploys', 'ok', () => sw.projects.deploys(projectId));
-  await step('projects.rename', 'ok', () =>
-    sw.projects.rename(projectId, { description: 'renamed description' }),
-  );
-
-  // ── DB ──────────────────────────────────────────────────────────
-  console.log('\n## Database');
-  await step('db.migrate', 'ok', () =>
-    sw.db.migrate(
-      `CREATE TABLE notes (
-         id INTEGER PRIMARY KEY,
-         title TEXT NOT NULL,
-         body TEXT,
-         created_at TEXT DEFAULT (datetime('now'))
-       );`,
-      projectId,
-    ),
-  );
-  await step('db.query insert', 'ok', () =>
-    sw.db.query(
-      'INSERT INTO notes (title, body) VALUES (?, ?), (?, ?)',
-      ['first', 'hello', 'second', 'world'],
-      projectId,
-    ),
-  );
-  await step('db.query select', 'ok', () =>
-    sw.db.query('SELECT id, title, body FROM notes ORDER BY id', [], projectId),
-  );
-  await step('db.tables', 'ok', () => sw.db.tables(projectId));
-  await step('db.schema', 'ok', () => sw.db.schema('notes', projectId));
-
-  // ── Storage (raw KV blobs) ──────────────────────────────────────
-  console.log('\n## Storage (raw R2)');
-  const blobBytes = new TextEncoder().encode('hello from sdk live test');
-  await step('storage.put', 'ok', () =>
-    sw.storage.put(
-      'test/blob.txt',
-      blobBytes,
-      { contentType: 'text/plain; charset=utf-8' },
-      projectId,
-    ),
-  );
-  await step('storage.get', 'ok', async () => {
-    const { body, contentType } = await sw.storage.get('test/blob.txt', projectId);
-    const text = new TextDecoder().decode(body);
-    return { bytes: body.byteLength, contentType, text: text.slice(0, 40) };
-  });
-  await step('storage.list', 'ok', () =>
-    sw.storage.list({ prefix: 'test/' }, projectId),
-  );
-  await step('storage.delete', 'ok', () =>
-    sw.storage.delete('test/blob.txt', projectId),
-  );
-
-  // ── FS (structured) ─────────────────────────────────────────────
-  console.log('\n## Filesystem');
-  await step('fs.write', 'ok', () =>
-    sw.fs.write(
-      '/sdk-test/hello.txt',
-      new TextEncoder().encode('hello fs'),
-      { contentType: 'text/plain' },
-      projectId,
-    ),
-  );
-  await step('fs.write v2', 'ok', () =>
-    sw.fs.write(
-      '/sdk-test/hello.txt',
-      new TextEncoder().encode('hello fs v2'),
-      { contentType: 'text/plain' },
-      projectId,
-    ),
-  );
-  await step('fs.stat', 'ok', () =>
-    sw.fs.stat('/sdk-test/hello.txt', projectId),
-  );
-  await step('fs.versions', 'ok', () =>
-    sw.fs.versions('/sdk-test/hello.txt', projectId),
-  );
-  await step('fs.read (file)', 'ok', async () => {
-    const r = await sw.fs.read('/sdk-test/hello.txt', projectId);
-    if ('body' in r) {
-      return {
-        bytes: r.body.byteLength,
-        text: new TextDecoder().decode(r.body),
-      };
-    }
-    throw new Error('expected file, got directory');
-  });
-  await step('fs.read (directory)', 'ok', async () => {
-    const r = await sw.fs.read('/sdk-test', projectId);
-    if ('entries' in r) return { entries: r.entries.length };
-    return { warning: 'expected directory listing, got file' };
-  });
-  await step('fs.copy', 'ok', () =>
-    sw.fs.copy('/sdk-test/hello.txt', '/sdk-test/copy.txt', projectId),
-  );
-  await step('fs.move', 'ok', () =>
-    sw.fs.move('/sdk-test/copy.txt', '/sdk-test/moved.txt', projectId),
-  );
-  await step('fs.delete', 'ok', () =>
-    sw.fs.delete('/sdk-test/moved.txt', projectId),
-  );
-
-  // ── Env vars ────────────────────────────────────────────────────
-  console.log('\n## Env vars');
-  await step('env.set', 'ok', () =>
-    sw.env.set('SDK_TEST_VAR', 'sdk-live-value', projectId),
-  );
-  await step('env.list', 'ok', () => sw.env.list(projectId));
-  await step('env.delete', 'ok', () =>
-    sw.env.delete('SDK_TEST_VAR', projectId),
-  );
-
-  // ── App-user auth ───────────────────────────────────────────────
-  console.log('\n## App-user auth');
-  const signupEmail = `sdk-${suffix}@example.com`;
-  const signupPassword = 'sdk-live-test-password-123';
-  const signup = await step('auth.signup', 'ok', () =>
-    sw.auth.signup(signupEmail, signupPassword, projectId),
-  );
-  appUserJwt = signup?.token;
-  const login = await step('auth.login', 'ok', () =>
-    sw.auth.login(signupEmail, signupPassword, projectId),
-  );
-  appUserSessionToken = login?.session_token;
-  await step('auth.users', 'ok', () =>
-    sw.auth.users({ limit: 5 }, projectId),
-  );
-  await step(
-    'auth.forgot (anti-enumeration — always ok)',
-    'ok',
-    () => sw.auth.forgot(signupEmail, projectId),
-  );
-  if (appUserSessionToken) {
-    await step('auth.logout', 'ok', () =>
-      sw.auth.logout(appUserSessionToken, projectId),
-    );
-  }
-
-  // auth.me with app-user JWT (new short-lived client)
-  if (appUserJwt) {
-    const appSw = new Somewhere({ token: appUserJwt, projectId });
-    await step('auth.me (app-user JWT)', 'ok', () => appSw.auth.me());
-    await step('db.query (app-user JWT, dual-auth)', 'ok', () =>
-      appSw.db.query('SELECT 1 AS one'),
-    );
-  }
-
-  // ── Deploy → promote → rollback → undeploy ──────────────────────
-  console.log('\n## Deploy / Promote');
-  await step('deploy (static index.html)', 'ok', () =>
-    sw.deploy({
-      projectId,
-      files: {
-        'index.html': '<!doctype html><h1>SDK live test</h1>',
-      },
-    }),
-  );
-  await step('deploy.status', 'ok', () => sw.deploy.status(projectId));
-
-  // promote + rollback — free tier returns UPGRADE_REQUIRED.
-  // Bootstrap admin is Builder so we expect ok, but we'll accept either.
-  await step(
-    'promote',
-    'ok|UPGRADE_REQUIRED|NOT_FOUND|DEPLOY_NOT_READY',
-    () => sw.promote(projectId),
-  );
-  await step(
-    'promote.rollback',
-    'ok|UPGRADE_REQUIRED|NOT_FOUND|NO_PROD_SNAPSHOT',
-    () => sw.promote.rollback(projectId),
-  );
-
-  // ── Email (Resend proxy) ────────────────────────────────────────
-  console.log('\n## Email');
-  await step(
-    'email.send',
-    'ok|RESEND_ERROR|UPSTREAM_ERROR|QUOTA_EXCEEDED|VALIDATION_ERROR',
-    () =>
-      sw.email.send(
-        {
-          to: 'sdk-test@example.com',
-          subject: 'SDK live test',
-          text: 'hello from the sdk live surface test',
-        },
-        projectId,
-      ),
-  );
-
-  // ── AI proxy (activation-gated) ─────────────────────────────────
-  console.log('\n## AI');
-  await step(
-    'ai.complete',
-    'ok|PAID_API_NOT_ACTIVATED|UPSTREAM_ERROR|QUOTA_EXCEEDED',
-    () =>
-      sw.ai.complete(
-        {
-          messages: [{ role: 'user', content: 'Reply with the word pong and nothing else.' }],
-          maxTokens: 32,
-        },
-        projectId,
-      ),
-  );
-
-  // Stubs — endpoints not shipped. We expect UNSUPPORTED_FEATURE / NOT_FOUND.
-  await step(
-    'ai.embed (stub)',
-    'ok|UNSUPPORTED_FEATURE|NOT_FOUND|PAID_API_NOT_ACTIVATED',
-    () => sw.ai.embed({ input: 'hello' }, projectId),
-  );
-  await step(
-    'ai.image (stub)',
-    'ok|UNSUPPORTED_FEATURE|NOT_FOUND|PAID_API_NOT_ACTIVATED',
-    () => sw.ai.image({ prompt: 'a cat' }, projectId),
-  );
-  await step(
-    'ai.tts (stub)',
-    'ok|UNSUPPORTED_FEATURE|NOT_FOUND|PAID_API_NOT_ACTIVATED',
-    () => sw.ai.tts({ input: 'hello' }, projectId),
-  );
-
-  // ── Logs ────────────────────────────────────────────────────────
-  console.log('\n## Logs');
-  await step('logs.write', 'ok', () =>
-    sw.logs.write(
-      { level: 'info', message: 'sdk live test info entry', data: { suffix } },
-      projectId,
-    ),
-  );
-  await step('logs.read', 'ok', () =>
-    sw.logs.read({ limit: 10 }, projectId),
-  );
-
-  // ── Jobs / Cron / Queue ─────────────────────────────────────────
-  console.log('\n## Jobs / Cron / Queue');
-  // Use httpbin as a reliable 200-responding handler URL so the job
-  // tier-1 executor actually completes.
-  const handler = 'https://httpbin.org/post';
-  const job = await step('jobs.create', 'ok', () =>
-    sw.jobs.create(
-      { handler, payload: { suffix }, timeoutSeconds: 30 },
-      projectId,
-    ),
-  );
-  jobId = job?.job_id;
-  if (jobId) {
-    await step('jobs.status', 'ok', () => sw.jobs.status(jobId));
-    await step('jobs.list', 'ok', () =>
-      sw.jobs.list({ limit: 5 }, projectId),
-    );
-    await step(
-      'jobs.progress',
-      'ok|JOB_NOT_FOUND|JOB_COMPLETE|VALIDATION_ERROR',
-      () => sw.jobs.progress(jobId, { progress: 50, message: 'halfway' }),
-    );
-    await step(
-      'jobs.cancel',
-      'ok|JOB_ALREADY_COMPLETE|JOB_NOT_FOUND|JOB_COMPLETE',
-      () => sw.jobs.cancel(jobId),
-    );
-  }
-
-  const cron = await step('cron.create', 'ok', () =>
-    sw.cron.create(
-      {
-        schedule: '0 0 1 1 *',
-        handler,
-        name: `sdk-live-${suffix}`,
-        enabled: false,
-      },
-      projectId,
-    ),
-  );
-  cronId = cron?.cron_id;
-  if (cronId) {
-    await step('cron.list', 'ok', () => sw.cron.list(projectId));
-    await step('cron.update', 'ok', () =>
-      sw.cron.update(cronId, { enabled: true }),
-    );
-    await step('cron.delete', 'ok', () => sw.cron.delete(cronId));
-  }
-
-  await step('queue.push', 'ok', () =>
-    sw.queue.push({ handler, payload: { suffix } }, projectId),
-  );
-
-  // ── Preview sharing ─────────────────────────────────────────────
-  console.log('\n## Preview');
-  await step(
-    'preview.invite',
-    'ok|UPSTREAM_ERROR|UPGRADE_REQUIRED|VALIDATION_ERROR',
-    () => sw.preview.invite(`preview-${suffix}@example.com`, projectId),
-  );
-  await step(
-    'preview.viewers',
-    'ok|UPGRADE_REQUIRED',
-    () => sw.preview.viewers(projectId),
-  );
-  await step(
-    'preview.revoke',
-    'ok|UPGRADE_REQUIRED|VIEWER_NOT_FOUND',
-    () => sw.preview.revoke(`preview-${suffix}@example.com`, projectId),
-  );
-
-  // ── Domains (BYO, verification will fail without a real CNAME) ──
-  console.log('\n## Domains (BYO)');
-  await step(
-    'domains.add',
-    'ok|UPGRADE_REQUIRED|DOMAIN_ALREADY_EXISTS|VALIDATION_ERROR',
-    () => sw.domains.add(`sdk-${suffix}.example.com`, projectId),
-  );
-  await step(
-    'domains.list',
-    'ok|UPGRADE_REQUIRED',
-    () => sw.domains.list(projectId),
-  );
-  await step(
-    'domains.verify',
-    'ok|UPGRADE_REQUIRED|DOMAIN_NOT_VERIFIED|NOT_FOUND|VERIFICATION_FAILED',
-    () => sw.domains.verify(`sdk-${suffix}.example.com`),
-  );
-  await step(
-    'domains.delete',
-    'ok|UPGRADE_REQUIRED|NOT_FOUND',
-    () => sw.domains.delete(`sdk-${suffix}.example.com`),
-  );
-
-  // ── Feedback ────────────────────────────────────────────────────
-  console.log('\n## Feedback');
-  await step('feedback.submit', 'ok', () =>
-    sw.feedback.submit(
-      { message: `sdk live test feedback ${suffix}`, pageUrl: 'https://example.com' },
-      projectId,
-    ),
-  );
-  await step('feedback.list', 'ok', () => sw.feedback.list(projectId));
-
-  // ── Usage (project scope) ───────────────────────────────────────
-  console.log('\n## Usage (project)');
-  await step('usage.get', 'ok', () => sw.usage.get(projectId));
-
-  // ── Project lifecycle: undeploy → archive → unarchive → delete ──
-  console.log('\n## Project lifecycle finish');
-  await step('projects.undeploy', 'ok|NOT_DEPLOYED', () =>
-    sw.projects.undeploy(projectId),
-  );
-  await step('projects.archive', 'ok', () =>
-    sw.projects.archive(projectId),
-  );
-  await step('projects.unarchive', 'ok', () =>
-    sw.projects.unarchive(projectId),
-  );
-
-  // ── Auth verification stubs (requires app-user JWT) ─────────────
-  if (appUserJwt) {
-    console.log('\n## App-user verification surface');
-    const appSw = new Somewhere({ token: appUserJwt, projectId });
-    await step(
-      'auth.requestVerification (app-user)',
-      'ok|ALREADY_VERIFIED|RATE_LIMITED',
-      () => appSw.auth.requestVerification(),
-    );
-    await step(
-      'auth.verifyEmail (wrong code — must error)',
-      'ok|INVALID_CODE|VALIDATION_ERROR|NO_VERIFICATION_PENDING|NOT_FOUND|AUTH_INVALID_CREDS',
-      () => appSw.auth.verifyEmail('000000'),
-    );
-    await step(
-      'auth.updateMe (app-user)',
-      'ok',
-      () => appSw.auth.updateMe({ displayName: `SDK Tester ${suffix}` }),
-    );
-  }
-}
-
-async function cleanup() {
-  console.log('\n## Cleanup');
-  if (!projectId) return;
-
-  // Two-step delete: projects.requestDelete emails a 6-digit code, then
-  // projects.delete(id, code) actually destroys. The bootstrap admin's
-  // email doesn't deliver, so the test reads the code out of the
-  // delete_confirmations D1 table via the CF REST API. Real users read
-  // the code from their inbox.
-  try {
-    const req = await sw.projects.requestDelete(projectId);
-    console.log(`  ✅ projects.requestDelete — ${previewJson(req)}`);
-    results.push({
-      name: 'projects.requestDelete (cleanup)',
-      expect: 'ok',
-      outcome: 'pass',
-      detail: previewJson(req),
-    });
-  } catch (err) {
-    const msg = err instanceof SomewhereError ? `${err.code}: ${err.message}` : String(err);
-    console.warn(`  ⚠️  projects.requestDelete — ${msg}`);
-    results.push({
-      name: 'projects.requestDelete (cleanup)',
-      expect: 'ok',
-      outcome: 'fail',
-      detail: msg,
-    });
-    return;
-  }
-
-  const code = await fetchDeleteCodeFromD1(projectId);
-  if (!code) {
-    console.warn(`  ⚠️  could not fetch delete code — project ${projectId} orphaned`);
-    results.push({
-      name: 'projects.delete (cleanup)',
-      expect: 'ok',
-      outcome: 'fail',
-      detail: `could not fetch confirmation code for project ${projectId}`,
-    });
-    return;
-  }
-
-  try {
-    const deleted = await sw.projects.delete(projectId, code);
-    console.log(`  ✅ projects.delete — ${previewJson(deleted)}`);
-    results.push({
-      name: 'projects.delete (cleanup)',
-      expect: 'ok',
-      outcome: 'pass',
-      detail: previewJson(deleted),
-    });
-  } catch (err) {
-    const msg = err instanceof SomewhereError ? `${err.code}: ${err.message}` : String(err);
-    console.warn(`  ⚠️  projects.delete — ${msg}`);
-    results.push({
-      name: 'projects.delete (cleanup)',
-      expect: 'ok',
-      outcome: 'fail',
-      detail: msg,
-    });
-  }
-}
-
 /**
- * Reads the most recent unused delete confirmation code for a project
- * directly from the `delete_confirmations` D1 table via the CF REST API.
- * Only used for test cleanup — real users get the code via email.
+ * `stepResult` expects a `{data, error}` envelope. `pass` means
+ * `error == null`; `fail` means the envelope carried an error we didn't
+ * whitelist; `expected-error` means the envelope error matches one of
+ * the accepted codes in `expect`.
  */
+async function stepResult(name, expect, fn) {
+  const row = { name, expect, outcome: 'pending', detail: '' };
+  results.push(row);
+  try {
+    const result = await fn();
+    if (!result || typeof result !== 'object' || !('error' in result)) {
+      row.outcome = 'crash';
+      row.detail = `result is not a {data, error} envelope: ${previewJson(result)}`;
+      console.error(`  💥 ${name} — ${row.detail}`);
+      return result;
+    }
+    if (result.error == null) {
+      row.outcome = 'pass';
+      row.detail = previewJson(result.data);
+      console.log(`  ✅ ${name} — ${row.detail}`);
+      return result;
+    }
+    const acceptable = expect.split('|').slice(1);
+    if (acceptable.includes(result.error.code)) {
+      row.outcome = 'expected-error';
+      row.detail = `${result.error.code} (${result.error.statusCode}): ${result.error.message}`;
+      console.log(`  ⚠️  ${name} — expected ${result.error.code}`);
+      return result;
+    }
+    row.outcome = 'fail';
+    row.detail = `${result.error.code} (${result.error.statusCode}): ${result.error.message}`;
+    console.error(`  ❌ ${name} — ${result.error.code}: ${result.error.message}`);
+    return result;
+  } catch (err) {
+    row.outcome = 'crash';
+    row.detail = String(err?.stack ?? err);
+    console.error(`  💥 ${name} — ${err}`);
+    return null;
+  }
+}
+
+async function httpDirect(method, path, body) {
+  const url = `${BASE_URL}${path}`;
+  const res = await fetch(url, {
+    method,
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || json?.ok !== true) {
+    throw new Error(`${method} ${path} → ${res.status} ${JSON.stringify(json)}`);
+  }
+  return json.data;
+}
+
 async function fetchDeleteCodeFromD1(targetProjectId) {
-  const { readFileSync } = await import('node:fs');
   const envText = readFileSync('/Users/uzair/somewhere-tech/.env', 'utf-8');
   const pick = (name) => envText.match(new RegExp(`^${name}=(.+)$`, 'm'))?.[1]?.trim();
   const email = pick('CF_GLOBAL_KEY_EMAIL');
-  const key = pick('CF_GLOBAL_API_KEY');
-  if (!email || !key) return null;
+  const apiKey = pick('CF_GLOBAL_API_KEY');
+  if (!email || !apiKey) return null;
   const accountId = 'b40a6657ef9b59a7bbc7fdf3f271a667';
   const dbId = 'a1a13e63-7579-4d4b-b1f3-e7ae8746dfbe';
   const sql = `SELECT code FROM delete_confirmations WHERE target_id = '${targetProjectId}' AND used_at IS NULL ORDER BY created_at DESC LIMIT 1`;
@@ -584,7 +144,7 @@ async function fetchDeleteCodeFromD1(targetProjectId) {
       method: 'POST',
       headers: {
         'X-Auth-Email': email,
-        'X-Auth-Key': key,
+        'X-Auth-Key': apiKey,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ sql }),
@@ -594,12 +154,381 @@ async function fetchDeleteCodeFromD1(targetProjectId) {
   return json?.result?.[0]?.results?.[0]?.code ?? null;
 }
 
+async function main() {
+  console.log(`\n=== SDK LIVE TEST — dominant-player rewrite (${suffix}) ===\n`);
+
+  // ── Provision the scratch project directly (SDK no longer owns projects) ──
+  console.log('\n## Setup (scratch project via raw HTTP)');
+  const proj = await step('provision project', 'ok', () =>
+    httpDirect('POST', '/projects', {
+      name: `SDK DPR ${suffix}`,
+      subdomain,
+      description: 'dominant-player rewrite live test',
+    }),
+  );
+  if (!proj?.id) {
+    console.error('fatal: could not provision test project');
+    await dumpResults();
+    process.exit(1);
+  }
+  projectId = proj.id;
+
+  const sw = new Somewhere({ key, projectId });
+  console.log(`  project id: ${projectId}`);
+
+  // Need a schema before db queries work. Migrate via raw HTTP — the SDK
+  // no longer exposes db.migrate (by design; DDL is a dashboard concern).
+  await step('schema migrate', 'ok', () =>
+    httpDirect('POST', '/db/migrate', {
+      project_id: projectId,
+      sql: `
+        CREATE TABLE users (
+          id INTEGER PRIMARY KEY,
+          name TEXT NOT NULL,
+          email TEXT NOT NULL UNIQUE,
+          status TEXT DEFAULT 'active',
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE bookings (
+          id INTEGER PRIMARY KEY,
+          user_id INTEGER,
+          slot TEXT NOT NULL,
+          confirmed INTEGER DEFAULT 0,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+      `,
+    }),
+  );
+
+  // ── sw.from(...) — Supabase-style query builder ──────────────────
+  console.log('\n## sw.from(...) — Supabase query builder');
+
+  await stepResult('from.insert single', 'ok', () =>
+    sw.from('users').insert({ name: 'Alice', email: 'alice@example.com' }),
+  );
+  await stepResult('from.insert multiple', 'ok', () =>
+    sw.from('users').insert([
+      { name: 'Bob', email: 'bob@example.com' },
+      { name: 'Carol', email: 'carol@example.com', status: 'pending' },
+    ]),
+  );
+
+  await stepResult('from.select *', 'ok', () =>
+    sw.from('users').select('*'),
+  );
+  await stepResult('from.select columns', 'ok', () =>
+    sw.from('users').select('id, name, email'),
+  );
+  await stepResult('from.select eq', 'ok', () =>
+    sw.from('users').select('*').eq('email', 'alice@example.com'),
+  );
+  await stepResult('from.select neq', 'ok', () =>
+    sw.from('users').select('*').neq('status', 'active'),
+  );
+  await stepResult('from.select gt', 'ok', () =>
+    sw.from('users').select('*').gt('id', 1),
+  );
+  await stepResult('from.select gte', 'ok', () =>
+    sw.from('users').select('*').gte('id', 2),
+  );
+  await stepResult('from.select lt', 'ok', () =>
+    sw.from('users').select('*').lt('id', 3),
+  );
+  await stepResult('from.select lte', 'ok', () =>
+    sw.from('users').select('*').lte('id', 2),
+  );
+  await stepResult('from.select like', 'ok', () =>
+    sw.from('users').select('*').like('email', '%@example.com'),
+  );
+  await stepResult('from.select ilike', 'ok', () =>
+    sw.from('users').select('*').ilike('name', 'alice'),
+  );
+  await stepResult('from.select in', 'ok', () =>
+    sw.from('users').select('*').in('name', ['Alice', 'Bob']),
+  );
+  await stepResult('from.select match', 'ok', () =>
+    sw.from('users').select('*').match({ name: 'Alice', status: 'active' }),
+  );
+  await stepResult('from.select order', 'ok', () =>
+    sw.from('users').select('id, name').order('name', { ascending: false }),
+  );
+  await stepResult('from.select limit', 'ok', () =>
+    sw.from('users').select('*').limit(2),
+  );
+  await stepResult('from.select range', 'ok', () =>
+    sw.from('users').select('*').range(0, 1),
+  );
+  await stepResult('from.select single', 'ok', () =>
+    sw.from('users').select('*').eq('email', 'alice@example.com').single(),
+  );
+  await stepResult('from.select maybeSingle (0 rows)', 'ok', () =>
+    sw.from('users').select('*').eq('email', 'nobody@example.com').maybeSingle(),
+  );
+  await stepResult('from.select single (0 rows — must error)', 'ok|PGRST116', () =>
+    sw.from('users').select('*').eq('email', 'nobody@example.com').single(),
+  );
+
+  await stepResult('from.update eq', 'ok', () =>
+    sw
+      .from('users')
+      .update({ status: 'verified' })
+      .eq('email', 'alice@example.com'),
+  );
+
+  await stepResult('from.upsert', 'ok', () =>
+    sw
+      .from('users')
+      .upsert(
+        { email: 'dave@example.com', name: 'Dave' },
+        { onConflict: 'email' },
+      ),
+  );
+
+  await stepResult('from.delete eq', 'ok', () =>
+    sw.from('users').delete().eq('email', 'carol@example.com'),
+  );
+
+  // Error paths: bad SQL / injection attempt should throw cleanly.
+  await stepResult('from invalid identifier (error)', 'ok|VALIDATION_ERROR', () =>
+    sw.from('u; DROP TABLE users; --').select('*'),
+  );
+
+  // ── sw.storage.from(...) — Supabase Storage ─────────────────────
+  console.log('\n## sw.storage.from(...) — Supabase Storage');
+
+  const bucket = sw.storage.from('avatars');
+  const photo = new TextEncoder().encode('fake png bytes');
+  await stepResult('storage.upload', 'ok', () =>
+    bucket.upload('alice.png', photo, { contentType: 'image/png' }),
+  );
+
+  await stepResult('storage.list (root)', 'ok', () => bucket.list());
+
+  const down = await stepResult('storage.download', 'ok', () =>
+    bucket.download('alice.png'),
+  );
+  if (down?.data?.body) {
+    const bytes = new Uint8Array(down.data.body);
+    const text = new TextDecoder().decode(bytes);
+    const pass = text === 'fake png bytes';
+    results.push({
+      name: 'storage.download byte-exact round-trip',
+      expect: 'ok',
+      outcome: pass ? 'pass' : 'fail',
+      detail: `bytes=${bytes.byteLength} text=${JSON.stringify(text)}`,
+    });
+    console.log(`  ${pass ? '✅' : '❌'} storage.download byte-exact round-trip`);
+  }
+
+  const urlResult = bucket.getPublicUrl('alice.png');
+  results.push({
+    name: 'storage.getPublicUrl',
+    expect: 'ok',
+    outcome: urlResult?.data?.publicUrl ? 'pass' : 'fail',
+    detail: previewJson(urlResult),
+  });
+  console.log(`  ✅ storage.getPublicUrl — ${previewJson(urlResult)}`);
+
+  await stepResult('storage.remove', 'ok', () =>
+    bucket.remove(['alice.png']),
+  );
+
+  // After remove, download should error.
+  await stepResult('storage.download missing (error)', 'ok|NOT_FOUND|STORAGE_NOT_FOUND', () =>
+    bucket.download('alice.png'),
+  );
+
+  // ── sw.auth — Supabase Auth ──────────────────────────────────────
+  console.log('\n## sw.auth — Supabase Auth');
+
+  const authEmail = `auth-${suffix}@example.com`;
+  const authPassword = 'sdk-live-test-password-123';
+
+  await stepResult('auth.signUp', 'ok', () =>
+    sw.auth.signUp({ email: authEmail, password: authPassword }),
+  );
+  // After signUp the SDK should auto-session. Verify subsequent calls run scoped.
+  const getUserPost = await stepResult('auth.getUser (post-signUp)', 'ok', () =>
+    sw.auth.getUser(),
+  );
+  {
+    const pass = getUserPost?.data?.user?.email === authEmail;
+    results.push({
+      name: 'auth.getUser returns the signUp email',
+      expect: 'ok',
+      outcome: pass ? 'pass' : 'fail',
+      detail: `email=${getUserPost?.data?.user?.email}`,
+    });
+    console.log(`  ${pass ? '✅' : '❌'} auth.getUser returns the signUp email`);
+  }
+
+  // Sign out clears session; subsequent calls fall back to the smt_ key.
+  await stepResult('auth.signOut', 'ok', () => sw.auth.signOut());
+
+  const signInResult = await stepResult('auth.signInWithPassword', 'ok', () =>
+    sw.auth.signInWithPassword({ email: authEmail, password: authPassword }),
+  );
+  const accessToken = signInResult?.data?.session?.access_token;
+
+  // signInWithOAuth returns a URL, no HTTP.
+  await stepResult('auth.signInWithOAuth (google)', 'ok', () =>
+    sw.auth.signInWithOAuth({ provider: 'google' }),
+  );
+  await stepResult(
+    'auth.signInWithOAuth (unsupported provider)',
+    'ok|UNSUPPORTED_FEATURE',
+    () => sw.auth.signInWithOAuth({ provider: 'github' }),
+  );
+
+  // In-memory session
+  const session = await stepResult('auth.getSession', 'ok', () =>
+    sw.auth.getSession(),
+  );
+  {
+    const pass = session?.data?.session?.access_token === accessToken;
+    results.push({
+      name: 'auth.getSession reflects in-memory state',
+      expect: 'ok',
+      outcome: pass ? 'pass' : 'fail',
+      detail: `match=${pass}`,
+    });
+    console.log(`  ${pass ? '✅' : '❌'} auth.getSession reflects in-memory state`);
+  }
+
+  // updateUser — patch the display name
+  await stepResult('auth.updateUser', 'ok', () =>
+    sw.auth.updateUser({ display_name: `SDK Tester ${suffix}` }),
+  );
+
+  // resetPasswordForEmail (anti-enumeration → always success)
+  await stepResult('auth.resetPasswordForEmail', 'ok', () =>
+    sw.auth.resetPasswordForEmail(authEmail),
+  );
+
+  // ── setSession flow: simulate browser rehydrating a stored JWT ────
+  if (accessToken) {
+    const freshSw = new Somewhere({ key, projectId });
+    await stepResult('auth.setSession (rehydrate)', 'ok', () =>
+      freshSw.auth.setSession({ access_token: accessToken }),
+    );
+    const dualAuthQuery = await stepResult(
+      'from.select via rehydrated session',
+      'ok',
+      () => freshSw.from('users').select('id, email').eq('email', authEmail),
+    );
+    results.push({
+      name: 'rehydrated session scopes to app_user',
+      expect: 'ok',
+      outcome:
+        Array.isArray(dualAuthQuery?.data) && dualAuthQuery.data.length >= 0 ? 'pass' : 'fail',
+      detail: previewJson(dualAuthQuery?.data),
+    });
+    console.log(`  ✅ rehydrated session scopes to app_user`);
+  }
+
+  // ── sw.emails.send — Resend shape ───────────────────────────────
+  console.log('\n## sw.emails.send — Resend shape');
+  await stepResult('emails.send', 'ok|VALIDATION_ERROR|UPSTREAM_ERROR', () =>
+    sw.emails.send({
+      from: 'noreply@somewhere.tech',
+      to: 'sdk-test@example.com',
+      subject: `SDK DPR ${suffix}`,
+      html: `<h1>Hello from the SDK</h1><p>Run ${suffix}</p>`,
+      text: `Hello from the SDK (run ${suffix})`,
+    }),
+  );
+
+  // ── sw.chat.completions.create — OpenAI shape (throws on error) ──
+  console.log('\n## sw.chat.completions.create — OpenAI shape');
+  try {
+    const completion = await sw.chat.completions.create({
+      model: 'claude-sonnet-4-6',
+      messages: [{ role: 'user', content: 'Reply with the single word "pong" and nothing else.' }],
+      max_tokens: 16,
+    });
+    const ok =
+      completion.object === 'chat.completion' &&
+      Array.isArray(completion.choices) &&
+      completion.choices[0]?.message?.role === 'assistant' &&
+      typeof completion.choices[0]?.message?.content === 'string' &&
+      typeof completion.usage?.total_tokens === 'number';
+    results.push({
+      name: 'chat.completions.create',
+      expect: 'ok',
+      outcome: ok ? 'pass' : 'fail',
+      detail: previewJson({
+        id: completion.id,
+        model: completion.model,
+        content: completion.choices[0]?.message?.content,
+        usage: completion.usage,
+      }),
+    });
+    console.log(`  ${ok ? '✅' : '❌'} chat.completions.create`);
+  } catch (err) {
+    results.push({
+      name: 'chat.completions.create',
+      expect: 'ok',
+      outcome: err instanceof SomewhereError ? 'fail' : 'crash',
+      detail: err instanceof SomewhereError ? `${err.code}: ${err.message}` : String(err),
+    });
+    console.error(`  ❌ chat.completions.create — ${err}`);
+  }
+}
+
+async function cleanup() {
+  console.log('\n## Cleanup');
+  if (!projectId) return;
+  try {
+    await httpDirect('POST', `/projects/${projectId}/request-delete`);
+    results.push({
+      name: 'projects.requestDelete (cleanup via raw HTTP)',
+      expect: 'ok',
+      outcome: 'pass',
+      detail: 'code requested',
+    });
+  } catch (err) {
+    results.push({
+      name: 'projects.requestDelete (cleanup via raw HTTP)',
+      expect: 'ok',
+      outcome: 'fail',
+      detail: String(err),
+    });
+    return;
+  }
+  const code = await fetchDeleteCodeFromD1(projectId);
+  if (!code) {
+    results.push({
+      name: 'projects.delete (cleanup)',
+      expect: 'ok',
+      outcome: 'fail',
+      detail: `could not fetch code for ${projectId}`,
+    });
+    return;
+  }
+  try {
+    await httpDirect('DELETE', `/projects/${projectId}`, { code });
+    results.push({
+      name: 'projects.delete (cleanup via raw HTTP)',
+      expect: 'ok',
+      outcome: 'pass',
+      detail: 'deleted',
+    });
+    console.log(`  ✅ cleanup complete`);
+  } catch (err) {
+    results.push({
+      name: 'projects.delete (cleanup)',
+      expect: 'ok',
+      outcome: 'fail',
+      detail: String(err),
+    });
+  }
+}
+
 async function dumpResults() {
   const pass = results.filter((r) => r.outcome === 'pass').length;
   const expectedErr = results.filter((r) => r.outcome === 'expected-error').length;
   const fail = results.filter((r) => r.outcome === 'fail').length;
   const crash = results.filter((r) => r.outcome === 'crash').length;
-
   console.log(
     `\n=== SUMMARY: ${pass} pass, ${expectedErr} expected-error, ${fail} fail, ${crash} crash ===`,
   );
@@ -611,37 +540,39 @@ async function dumpResults() {
       }
     }
   }
-
-  const markdown = buildMarkdownReport({ pass, expectedErr, fail, crash });
-  const logPath = new URL('./live-full-surface-results.md', import.meta.url).pathname;
-  writeFileSync(logPath, markdown);
-  console.log(`\n📄 Results saved to ${logPath}`);
+  const md = buildMarkdownReport({ pass, expectedErr, fail, crash });
+  writeFileSync(
+    '/Users/uzair/somewhere-sdks/somewhere-sdk-js/test/live-full-surface-results.md',
+    md,
+  );
+  console.log(
+    `\n📄 Results saved to /Users/uzair/somewhere-sdks/somewhere-sdk-js/test/live-full-surface-results.md`,
+  );
 }
 
 function buildMarkdownReport({ pass, expectedErr, fail, crash }) {
   const total = results.length;
-  const lines = [];
-  lines.push(`# JS SDK — Live Full-Surface Test Results`);
-  lines.push('');
-  lines.push(`- Run ID: \`${suffix}\``);
-  lines.push(`- Test subdomain: \`${subdomain}.somewhere.tech\``);
-  lines.push(`- API base: \`https://api.somewhere.tech/v1\``);
-  lines.push(`- Timestamp: ${new Date().toISOString()}`);
-  lines.push('');
-  lines.push(`## Totals`);
-  lines.push('');
-  lines.push(`| Outcome | Count |`);
-  lines.push(`|---|---|`);
-  lines.push(`| ✅ pass | ${pass} |`);
-  lines.push(`| ⚠️ expected error | ${expectedErr} |`);
-  lines.push(`| ❌ fail | ${fail} |`);
-  lines.push(`| 💥 crash | ${crash} |`);
-  lines.push(`| **total** | **${total}** |`);
-  lines.push('');
-  lines.push(`## Per-call results`);
-  lines.push('');
-  lines.push(`| # | Outcome | Method | Detail |`);
-  lines.push(`|---|---|---|---|`);
+  const out = [];
+  out.push('# JS SDK — Live Full-Surface Test (dominant-player rewrite)');
+  out.push('');
+  out.push(`- Run ID: \`${suffix}\``);
+  out.push(`- Subdomain: \`${subdomain}.somewhere.tech\``);
+  out.push(`- Timestamp: ${new Date().toISOString()}`);
+  out.push('');
+  out.push(`## Totals`);
+  out.push('');
+  out.push(`| Outcome | Count |`);
+  out.push(`|---|---|`);
+  out.push(`| ✅ pass | ${pass} |`);
+  out.push(`| ⚠️ expected error | ${expectedErr} |`);
+  out.push(`| ❌ fail | ${fail} |`);
+  out.push(`| 💥 crash | ${crash} |`);
+  out.push(`| **total** | **${total}** |`);
+  out.push('');
+  out.push(`## Per-call results`);
+  out.push('');
+  out.push(`| # | Outcome | Call | Detail |`);
+  out.push(`|---|---|---|---|`);
   results.forEach((r, i) => {
     const icon =
       r.outcome === 'pass'
@@ -652,24 +583,10 @@ function buildMarkdownReport({ pass, expectedErr, fail, crash }) {
             ? '❌'
             : '💥';
     const detail = (r.detail || '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
-    lines.push(`| ${i + 1} | ${icon} | \`${r.name}\` | ${detail} |`);
+    out.push(`| ${i + 1} | ${icon} | \`${r.name}\` | ${detail} |`);
   });
-  lines.push('');
-  if (fail + crash > 0) {
-    lines.push(`## Failures only`);
-    lines.push('');
-    for (const r of results) {
-      if (r.outcome === 'fail' || r.outcome === 'crash') {
-        lines.push(`### ${r.name}`);
-        lines.push('');
-        lines.push('```');
-        lines.push(r.detail);
-        lines.push('```');
-        lines.push('');
-      }
-    }
-  }
-  return lines.join('\n');
+  out.push('');
+  return out.join('\n');
 }
 
 try {

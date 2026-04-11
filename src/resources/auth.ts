@@ -1,120 +1,247 @@
 import type { Client } from '../client.js';
-import type { AppUser, AuthLoginResult } from '../types.js';
+import { SomewhereError } from '../errors.js';
+import type { AuthResponse, Result, Session, User } from '../types.js';
 
-export interface AuthUsersQuery {
-  search?: string;
-  limit?: number;
-  cursor?: string;
-  ids?: string[];
-}
+/**
+ * Supabase Auth-style client.
+ *
+ *     const { data, error } = await sw.auth.signUp({ email, password })
+ *     const { data, error } = await sw.auth.signInWithPassword({ email, password })
+ *     const { data, error } = await sw.auth.signOut()
+ *     const { data: { user } } = await sw.auth.getUser()
+ *
+ * Method names match `@supabase/supabase-js` for the supported subset.
+ * On successful `signUp` / `signInWithPassword` the SDK automatically
+ * swaps its in-memory auth header to the returned access token, so
+ * subsequent calls (db, storage, chat, emails) run with the user's
+ * JWT and are scoped to their session.
+ */
+export class AuthClient {
+  private currentSession: Session | null = null;
 
-export interface AuthUpdateMeInput {
-  displayName?: string;
-  metadata?: Record<string, unknown>;
-}
-
-export class AuthResource {
   constructor(private readonly client: Client) {}
 
-  signup(
-    email: string,
-    password: string,
-    projectId?: string,
-  ): Promise<AuthLoginResult> {
-    const pid = this.requireProjectId(projectId);
-    return this.client.call<AuthLoginResult>('POST', '/auth/signup', {
-      body: { project_id: pid, email, password },
+  /* ─── Sign up / in / out ───────────────────────────────────── */
+
+  async signUp(credentials: {
+    email: string;
+    password: string;
+  }): Promise<Result<AuthResponse>> {
+    return this.runAuthFlow('POST', '/auth/signup', {
+      email: credentials.email,
+      password: credentials.password,
     });
   }
 
-  login(
-    email: string,
-    password: string,
-    projectId?: string,
-  ): Promise<AuthLoginResult> {
-    const pid = this.requireProjectId(projectId);
-    return this.client.call<AuthLoginResult>('POST', '/auth/login', {
-      body: { project_id: pid, email, password },
-    });
-  }
-
-  logout(
-    sessionToken: string,
-    projectId?: string,
-  ): Promise<{ logged_out: true }> {
-    const pid = this.requireProjectId(projectId);
-    return this.client.call('POST', '/auth/logout', {
-      body: { project_id: pid, session_token: sessionToken },
+  async signInWithPassword(credentials: {
+    email: string;
+    password: string;
+  }): Promise<Result<AuthResponse>> {
+    return this.runAuthFlow('POST', '/auth/login', {
+      email: credentials.email,
+      password: credentials.password,
     });
   }
 
   /**
-   * `jwt` is ignored at the transport level — the SDK sends whatever auth
-   * the client was constructed with. Pass it only if you want to call `me`
-   * from a developer-key client against a specific end-user JWT via a
-   * short-lived override client.
+   * Returns a Google OAuth redirect URL. Matches Supabase's
+   * `signInWithOAuth`, but note the platform currently only supports
+   * Google. The caller redirects the browser to `data.url`.
    */
-  me(_jwt?: string): Promise<{ user: AppUser }> {
-    return this.client.call<{ user: AppUser }>('GET', '/auth/me');
-  }
-
-  forgot(email: string, projectId?: string): Promise<{ message: string }> {
-    const pid = this.requireProjectId(projectId);
-    return this.client.call('POST', '/auth/forgot', {
-      body: { project_id: pid, email },
-    });
-  }
-
-  reset(
-    token: string,
-    newPassword: string,
-    projectId?: string,
-  ): Promise<{ message: string }> {
-    const pid = this.requireProjectId(projectId);
-    return this.client.call('POST', '/auth/reset', {
-      body: { project_id: pid, token, new_password: newPassword },
-    });
-  }
-
-  users(
-    query: AuthUsersQuery = {},
-    projectId?: string,
-  ): Promise<{ users: AppUser[]; next_cursor?: string; count: number }> {
-    const pid = this.requireProjectId(projectId);
-    return this.client.call('GET', '/auth/users', {
-      query: {
-        project_id: pid,
-        search: query.search,
-        limit: query.limit,
-        cursor: query.cursor,
-        ids: query.ids?.join(','),
-      },
-    });
-  }
-
-  verifyEmail(code: string): Promise<{ verified: true }> {
-    return this.client.call('POST', '/auth/verify-email', { body: { code } });
-  }
-
-  requestVerification(): Promise<{ sent: true; expires_in_seconds: number } | { already_verified: true }> {
-    return this.client.call('POST', '/auth/request-email-verification');
-  }
-
-  deleteAccount(): Promise<{ deleted: true }> {
-    return this.client.call('DELETE', '/auth/users/me');
-  }
-
-  updateMe(input: AuthUpdateMeInput): Promise<{ user: AppUser }> {
-    return this.client.call('PATCH', '/auth/users/me', {
-      body: { display_name: input.displayName, metadata: input.metadata },
-    });
-  }
-
-  private requireProjectId(explicit?: string): string {
-    const pid = this.client.resolveProjectId(explicit);
-    if (!pid) {
-      throw new Error('auth.* calls require a projectId (via argument or constructor).');
+  async signInWithOAuth(options: {
+    provider: 'google';
+    redirectTo?: string;
+  }): Promise<Result<{ provider: 'google'; url: string }>> {
+    if (options.provider !== 'google') {
+      return {
+        data: null,
+        error: new SomewhereError({
+          code: 'UNSUPPORTED_FEATURE',
+          message: `Provider ${options.provider} is not supported. Use 'google'.`,
+          statusCode: 400,
+          retry: false,
+          retryAfterMs: null,
+        }),
+        status: 400,
+      };
     }
-    return pid;
+    const projectId = this.client.requireProjectId(undefined, 'auth.signInWithOAuth');
+    const redirect = options.redirectTo ?? '';
+    const url =
+      `${this.client.baseUrl}/auth/google?project_id=${encodeURIComponent(projectId)}` +
+      (redirect ? `&redirect_uri=${encodeURIComponent(redirect)}` : '');
+    return { data: { provider: 'google', url }, error: null, status: 200 };
+  }
+
+  async signOut(): Promise<Result<null>> {
+    const sessionToken = this.currentSession?.session_token;
+    try {
+      if (sessionToken) {
+        const projectId = this.client.requireProjectId(undefined, 'auth.signOut');
+        await this.client.call('POST', '/auth/logout', {
+          auth: 'developer',
+          body: { project_id: projectId, session_token: sessionToken },
+        });
+      }
+      this.currentSession = null;
+      this.client.clearSession();
+      return { data: null, error: null, status: 200 };
+    } catch (err) {
+      this.currentSession = null;
+      this.client.clearSession();
+      if (err instanceof SomewhereError) {
+        return { data: null, error: err, status: err.statusCode };
+      }
+      throw err;
+    }
+  }
+
+  /* ─── Session / user ────────────────────────────────────────── */
+
+  /** Returns the current session held in SDK memory — never makes an HTTP call. */
+  async getSession(): Promise<Result<{ session: Session | null }>> {
+    return { data: { session: this.currentSession }, error: null, status: 200 };
+  }
+
+  /** Fetch the current user from `GET /v1/auth/me`. */
+  async getUser(): Promise<Result<{ user: User | null }>> {
+    try {
+      const result = await this.client.call<{ user: User }>('GET', '/auth/me');
+      return {
+        data: { user: result.user },
+        error: null,
+        status: 200,
+      };
+    } catch (err) {
+      if (err instanceof SomewhereError) {
+        return { data: { user: null }, error: err, status: err.statusCode };
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Restore a session the caller stored themselves (e.g. in localStorage).
+   * This flips the SDK's auth header to the supplied `access_token` so
+   * subsequent calls run as that user.
+   */
+  async setSession(session: {
+    access_token: string;
+    session_token?: string;
+  }): Promise<Result<{ session: Session | null }>> {
+    this.client.setSessionToken(session.access_token);
+    try {
+      const result = await this.client.call<{ user: User }>('GET', '/auth/me');
+      const fullSession: Session = {
+        access_token: session.access_token,
+        session_token: session.session_token,
+        user: result.user,
+      };
+      this.currentSession = fullSession;
+      return { data: { session: fullSession }, error: null, status: 200 };
+    } catch (err) {
+      this.client.clearSession();
+      this.currentSession = null;
+      if (err instanceof SomewhereError) {
+        return { data: { session: null }, error: err, status: err.statusCode };
+      }
+      throw err;
+    }
+  }
+
+  /** Patch the currently-signed-in user's profile (display name, metadata). */
+  async updateUser(attrs: {
+    display_name?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<Result<{ user: User | null }>> {
+    try {
+      const result = await this.client.call<{ user: User }>('PATCH', '/auth/users/me', {
+        auth: 'session',
+        body: { display_name: attrs.display_name, metadata: attrs.metadata },
+      });
+      if (this.currentSession) {
+        this.currentSession = { ...this.currentSession, user: result.user };
+      }
+      return { data: { user: result.user }, error: null, status: 200 };
+    } catch (err) {
+      if (err instanceof SomewhereError) {
+        return { data: { user: null }, error: err, status: err.statusCode };
+      }
+      throw err;
+    }
+  }
+
+  /** Trigger a password-reset email. */
+  async resetPasswordForEmail(email: string): Promise<Result<{ sent: true }>> {
+    const projectId = this.client.requireProjectId(undefined, 'auth.resetPasswordForEmail');
+    try {
+      await this.client.call('POST', '/auth/forgot', {
+        auth: 'developer',
+        body: { project_id: projectId, email },
+      });
+      return { data: { sent: true }, error: null, status: 200 };
+    } catch (err) {
+      if (err instanceof SomewhereError) {
+        return { data: null, error: err, status: err.statusCode };
+      }
+      throw err;
+    }
+  }
+
+  /** Complete a password reset using the token from the email. */
+  async verifyOtp(params: {
+    token: string;
+    newPassword: string;
+  }): Promise<Result<{ reset: true }>> {
+    const projectId = this.client.requireProjectId(undefined, 'auth.verifyOtp');
+    try {
+      await this.client.call('POST', '/auth/reset', {
+        auth: 'developer',
+        body: {
+          project_id: projectId,
+          token: params.token,
+          new_password: params.newPassword,
+        },
+      });
+      return { data: { reset: true }, error: null, status: 200 };
+    } catch (err) {
+      if (err instanceof SomewhereError) {
+        return { data: null, error: err, status: err.statusCode };
+      }
+      throw err;
+    }
+  }
+
+  /* ─── Internal ────────────────────────────────────────────── */
+
+  private async runAuthFlow(
+    method: 'POST',
+    path: string,
+    body: Record<string, unknown>,
+  ): Promise<Result<AuthResponse>> {
+    const projectId = this.client.requireProjectId(undefined, `auth${path}`);
+    try {
+      const result = await this.client.call<{
+        user: User;
+        token: string;
+        session_token?: string;
+      }>(method, path, {
+        auth: 'developer',
+        body: { ...body, project_id: projectId },
+      });
+      const session: Session = {
+        access_token: result.token,
+        session_token: result.session_token,
+        user: result.user,
+      };
+      this.currentSession = session;
+      this.client.setSessionToken(result.token);
+      return { data: { user: result.user, session }, error: null, status: 200 };
+    } catch (err) {
+      if (err instanceof SomewhereError) {
+        return { data: { user: null, session: null }, error: err, status: err.statusCode };
+      }
+      throw err;
+    }
   }
 }
