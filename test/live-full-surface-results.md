@@ -1,71 +1,102 @@
-# JS SDK — Live Full-Surface Test (dominant-player rewrite)
+# JS SDK — Robust Live Test (ve32p4)
 
-- Run ID: `dvoq4u`
-- Subdomain: `sdk-dpr-dvoq4u.somewhere.tech`
-- Timestamp: 2026-04-11T19:52:02.107Z
+- Timestamp: 2026-04-12T01:15:12.815Z
+- Subdomain: `sdk-t-ve32p4.somewhere.tech`
 
 ## Totals
 
 | Outcome | Count |
 |---|---|
-| ✅ pass | 47 |
-| ⚠️ expected error | 4 |
+| ✅ pass | 78 |
+| ⚠️ expected | 5 |
 | ❌ fail | 0 |
 | 💥 crash | 0 |
-| **total** | **51** |
+| **total** | **83** |
 
-## Per-call results
+## Per-call
 
-| # | Outcome | Call | Detail |
+| # | O | Call | Detail |
 |---|---|---|---|
-| 1 | ✅ | `provision project` | {"id":"66dc4928-6e1e-4e7f-be72-ccb5597caf6b","name":"SDK DPR dvoq4u","slug":"sdk-dpr-dvoq4u","subdomain":"sdk-dpr-dvoq4u","status":"deployed… |
-| 2 | ✅ | `schema migrate` | {"statements_run":2,"results":[{"sql":"CREATE TABLE users (\n          id INTEGER PRIMARY KEY,\n          name TEXT NOT NULL,\n          ema… |
-| 3 | ✅ | `from.insert single` | [{"id":1}] |
-| 4 | ✅ | `from.insert multiple` | [{"id":2},{"id":3}] |
-| 5 | ✅ | `from.select *` | [{"id":1,"name":"Alice","email":"alice@example.com","status":"active","created_at":"2026-04-11 19:51:53"},{"id":2,"name":"Bob","email":"bob@… |
-| 6 | ✅ | `from.select columns` | [{"id":1,"name":"Alice","email":"alice@example.com"},{"id":2,"name":"Bob","email":"bob@example.com"},{"id":3,"name":"Carol","email":"carol@e… |
-| 7 | ✅ | `from.select eq` | [{"id":1,"name":"Alice","email":"alice@example.com","status":"active","created_at":"2026-04-11 19:51:53"}] |
-| 8 | ✅ | `from.select neq` | [] |
-| 9 | ✅ | `from.select gt` | [{"id":2,"name":"Bob","email":"bob@example.com","status":"active","created_at":"2026-04-11 19:51:53"},{"id":3,"name":"Carol","email":"carol@… |
-| 10 | ✅ | `from.select gte` | [{"id":2,"name":"Bob","email":"bob@example.com","status":"active","created_at":"2026-04-11 19:51:53"},{"id":3,"name":"Carol","email":"carol@… |
-| 11 | ✅ | `from.select lt` | [{"id":1,"name":"Alice","email":"alice@example.com","status":"active","created_at":"2026-04-11 19:51:53"},{"id":2,"name":"Bob","email":"bob@… |
-| 12 | ✅ | `from.select lte` | [{"id":1,"name":"Alice","email":"alice@example.com","status":"active","created_at":"2026-04-11 19:51:53"},{"id":2,"name":"Bob","email":"bob@… |
-| 13 | ✅ | `from.select like` | [{"id":1,"name":"Alice","email":"alice@example.com","status":"active","created_at":"2026-04-11 19:51:53"},{"id":2,"name":"Bob","email":"bob@… |
-| 14 | ✅ | `from.select ilike` | [{"id":1,"name":"Alice","email":"alice@example.com","status":"active","created_at":"2026-04-11 19:51:53"}] |
-| 15 | ✅ | `from.select in` | [{"id":1,"name":"Alice","email":"alice@example.com","status":"active","created_at":"2026-04-11 19:51:53"},{"id":2,"name":"Bob","email":"bob@… |
-| 16 | ✅ | `from.select match` | [{"id":1,"name":"Alice","email":"alice@example.com","status":"active","created_at":"2026-04-11 19:51:53"}] |
-| 17 | ✅ | `from.select order` | [{"id":3,"name":"Carol"},{"id":2,"name":"Bob"},{"id":1,"name":"Alice"}] |
-| 18 | ✅ | `from.select limit` | [{"id":1,"name":"Alice","email":"alice@example.com","status":"active","created_at":"2026-04-11 19:51:53"},{"id":2,"name":"Bob","email":"bob@… |
-| 19 | ✅ | `from.select range` | [{"id":1,"name":"Alice","email":"alice@example.com","status":"active","created_at":"2026-04-11 19:51:53"},{"id":2,"name":"Bob","email":"bob@… |
-| 20 | ✅ | `from.select single` | {"id":1,"name":"Alice","email":"alice@example.com","status":"active","created_at":"2026-04-11 19:51:53"} |
-| 21 | ✅ | `from.select maybeSingle (0 rows)` | null |
-| 22 | ⚠️ | `from.select single (0 rows — must error)` | PGRST116 (406): Single-row query returned 0 rows. |
-| 23 | ✅ | `from.update eq` | [{"id":1}] |
-| 24 | ✅ | `from.upsert` | [{"id":4}] |
-| 25 | ✅ | `from.delete eq` | [{"id":3}] |
-| 26 | ⚠️ | `from invalid identifier (error)` | VALIDATION_ERROR (400): Somewhere: invalid identifier "u; DROP TABLE users; --". Only ASCII letters, digits, and underscores are allowed. |
-| 27 | ✅ | `storage.upload` | {"path":"alice.png","fullPath":"avatars/alice.png","id":"avatars/alice.png"} |
-| 28 | ✅ | `storage.list (root)` | [{"name":"alice.png","size":14,"updated_at":"2026-04-11T19:51:56.707Z","content_type":"application/octet-stream"}] |
-| 29 | ✅ | `storage.download` | {"body":{},"contentType":"image/png"} |
-| 30 | ✅ | `storage.download byte-exact round-trip` | bytes=14 text="fake png bytes" |
-| 31 | ✅ | `storage.getPublicUrl` | {"data":{"publicUrl":"https://api.somewhere.tech/v1/storage/66dc4928-6e1e-4e7f-be72-ccb5597caf6b/avatars/alice.png"}} |
-| 32 | ✅ | `storage.remove` | [{"name":"alice.png","size":0}] |
-| 33 | ⚠️ | `storage.download missing (error)` | STORAGE_NOT_FOUND (404): Key does not exist in storage. |
-| 34 | ✅ | `auth.signUp` | {"user":{"id":"9ea5ac70-8858-420e-924d-5b3401bfbb87","email":"auth-dvoq4u@example.com","display_name":null},"session":{"access_token":"eyJhb… |
-| 35 | ✅ | `auth.getUser (post-signUp)` | {"user":{"id":"9ea5ac70-8858-420e-924d-5b3401bfbb87","email":"auth-dvoq4u@example.com","display_name":null,"email_verified":0,"created_at":1… |
-| 36 | ✅ | `auth.getUser returns the signUp email` | email=auth-dvoq4u@example.com |
-| 37 | ✅ | `auth.signOut` | null |
-| 38 | ✅ | `auth.signInWithPassword` | {"user":{"id":"9ea5ac70-8858-420e-924d-5b3401bfbb87","email":"auth-dvoq4u@example.com","display_name":null},"session":{"access_token":"eyJhb… |
-| 39 | ✅ | `auth.signInWithOAuth (google)` | {"provider":"google","url":"https://api.somewhere.tech/v1/auth/google?project_id=66dc4928-6e1e-4e7f-be72-ccb5597caf6b"} |
-| 40 | ⚠️ | `auth.signInWithOAuth (unsupported provider)` | UNSUPPORTED_FEATURE (400): Provider github is not supported. Use 'google'. |
-| 41 | ✅ | `auth.getSession` | {"session":{"access_token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI5ZWE1YWM3MC04ODU4LTQyMGUtOTI0ZC01YjM0MDFiZmJiODciLCJwcm9qZWN0X2l… |
-| 42 | ✅ | `auth.getSession reflects in-memory state` | match=true |
-| 43 | ✅ | `auth.updateUser` | {"user":{"id":"9ea5ac70-8858-420e-924d-5b3401bfbb87","email":"auth-dvoq4u@example.com","display_name":"SDK Tester dvoq4u","email_verified":f… |
-| 44 | ✅ | `auth.resetPasswordForEmail` | {"sent":true} |
-| 45 | ✅ | `auth.setSession (rehydrate)` | {"session":{"access_token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI5ZWE1YWM3MC04ODU4LTQyMGUtOTI0ZC01YjM0MDFiZmJiODciLCJwcm9qZWN0X2l… |
-| 46 | ✅ | `from.select via rehydrated session` | [] |
-| 47 | ✅ | `rehydrated session scopes to app_user` | [] |
-| 48 | ✅ | `emails.send` | {"id":"5e29c955-c9ff-45cc-8d22-1d93a5120056"} |
-| 49 | ✅ | `chat.completions.create` | {"id":"chatcmpl-371p3r4u4h2m6u5t5u3h725v","model":"claude-sonnet-4-6","content":"pong","usage":{"prompt_tokens":20,"completion_tokens":5,"to… |
-| 50 | ✅ | `projects.requestDelete (cleanup via raw HTTP)` | code requested |
-| 51 | ✅ | `projects.delete (cleanup via raw HTTP)` | deleted |
+| 1 | ✅ | `insert single row` | [] |
+| 2 | ✅ | `insert multiple rows` | [] |
+| 3 | ✅ | `select *` | [{"id":1,"name":"Alice","email":"alice@test.com","role":"user","active":1,"created_at":"2026-04-12 01:15:03"},{"id":2,"name":"Bob","email":"bob@test.com","role"… |
+| 4 | ✅ | `select * returned 4 rows` | got 4 |
+| 5 | ✅ | `select columns` | [{"id":1,"name":"Alice","email":"alice@test.com"},{"id":2,"name":"Bob","email":"bob@test.com"},{"id":3,"name":"Carol","email":"carol@test.com"},{"id":4,"name":"… |
+| 6 | ✅ | `eq` | [{"id":1,"name":"Alice","email":"alice@test.com","role":"user","active":1,"created_at":"2026-04-12 01:15:03"}] |
+| 7 | ✅ | `neq` | [{"id":1,"name":"Alice","email":"alice@test.com","role":"user","active":1,"created_at":"2026-04-12 01:15:03"},{"id":2,"name":"Bob","email":"bob@test.com","role"… |
+| 8 | ✅ | `gt` | [{"id":3,"name":"Carol","email":"carol@test.com","role":"admin","active":1,"created_at":"2026-04-12 01:15:03"},{"id":4,"name":"Dave","email":"dave@test.com","ro… |
+| 9 | ✅ | `gte` | [{"id":2,"name":"Bob","email":"bob@test.com","role":"user","active":1,"created_at":"2026-04-12 01:15:03"},{"id":3,"name":"Carol","email":"carol@test.com","role"… |
+| 10 | ✅ | `lt` | [{"id":1,"name":"Alice","email":"alice@test.com","role":"user","active":1,"created_at":"2026-04-12 01:15:03"},{"id":2,"name":"Bob","email":"bob@test.com","role"… |
+| 11 | ✅ | `lte` | [{"id":1,"name":"Alice","email":"alice@test.com","role":"user","active":1,"created_at":"2026-04-12 01:15:03"},{"id":2,"name":"Bob","email":"bob@test.com","role"… |
+| 12 | ✅ | `like` | [{"id":1,"name":"Alice","email":"alice@test.com","role":"user","active":1,"created_at":"2026-04-12 01:15:03"},{"id":2,"name":"Bob","email":"bob@test.com","role"… |
+| 13 | ✅ | `ilike` | [{"id":1,"name":"Alice","email":"alice@test.com","role":"user","active":1,"created_at":"2026-04-12 01:15:03"}] |
+| 14 | ✅ | `in` | [{"id":1,"name":"Alice","email":"alice@test.com","role":"user","active":1,"created_at":"2026-04-12 01:15:03"},{"id":3,"name":"Carol","email":"carol@test.com","r… |
+| 15 | ✅ | `is(null)` | [] |
+| 16 | ✅ | `is(null) correctly filters` | type=object |
+| 17 | ✅ | `match` | [{"id":4,"name":"Dave","email":"dave@test.com","role":"admin","active":0,"created_at":"2026-04-12 01:15:03"}] |
+| 18 | ✅ | `order desc` | [{"id":4,"name":"Dave"},{"id":3,"name":"Carol"},{"id":2,"name":"Bob"},{"id":1,"name":"Alice"}] |
+| 19 | ✅ | `order desc first is Dave or Carol` | Dave |
+| 20 | ✅ | `limit` | [{"id":1,"name":"Alice","email":"alice@test.com","role":"user","active":1,"created_at":"2026-04-12 01:15:03"},{"id":2,"name":"Bob","email":"bob@test.com","role"… |
+| 21 | ✅ | `limit returned 2` | 2 |
+| 22 | ✅ | `range` | [{"id":2,"name":"Bob","email":"bob@test.com","role":"user","active":1,"created_at":"2026-04-12 01:15:03"},{"id":3,"name":"Carol","email":"carol@test.com","role"… |
+| 23 | ✅ | `range returned 2` | 2 |
+| 24 | ✅ | `single (1 match)` | {"id":1,"name":"Alice","email":"alice@test.com","role":"user","active":1,"created_at":"2026-04-12 01:15:03"} |
+| 25 | ✅ | `single returned object not array` | {"id":1,"name":"Alice","email":"alice@test.com","role":"user","active":1,"created_at":"2026-04-12 01:15:03"} |
+| 26 | ✅ | `maybeSingle (0 matches)` | null |
+| 27 | ⚠️ | `single (0 matches → PGRST116)` | PGRST116: Single-row query returned 0 rows. |
+| 28 | ✅ | `single 0-row returns error` | PGRST116 |
+| 29 | ✅ | `update with eq` | [] |
+| 30 | ✅ | `verify update took effect` | {"role":"verified"} |
+| 31 | ✅ | `update persisted` | verified |
+| 32 | ✅ | `upsert (existing)` | [] |
+| 33 | ✅ | `verify upsert` | {"name":"Alice Updated"} |
+| 34 | ✅ | `upsert updated name` | Alice Updated |
+| 35 | ✅ | `upsert (new)` | [] |
+| 36 | ✅ | `delete with eq` | [] |
+| 37 | ✅ | `verify delete` | [] |
+| 38 | ✅ | `deleted row is gone` | 0 |
+| 39 | ⚠️ | `invalid table (error)` | SYNTAX_ERROR: Invalid SQL: no such table: nonexistent_table: SQLITE_ERROR |
+| 40 | ✅ | `invalid table returns error` | SYNTAX_ERROR |
+| 41 | ✅ | `insert tasks` | [] |
+| 42 | ✅ | `select tasks with filter` | [{"id":1,"user_id":1,"title":"Buy milk","done":0}] |
+| 43 | ✅ | `filtered tasks correct` | [{"id":1,"user_id":1,"title":"Buy milk","done":0}] |
+| 44 | ✅ | `upload` | {"path":"docs/hello.txt","fullPath":"/test-bucket/docs/hello.txt","id":"/test-bucket/docs/hello.txt"} |
+| 45 | ✅ | `upload binary` | {"path":"imgs/pixel.png","fullPath":"/test-bucket/imgs/pixel.png","id":"/test-bucket/imgs/pixel.png"} |
+| 46 | ✅ | `download` | {"body":{},"contentType":"text/plain"} |
+| 47 | ✅ | `download byte-exact` | "hello storage round-trip test" |
+| 48 | ✅ | `list` | [{"name":"docs","size":0,"content_type":null,"updated_at":"2026-04-12T01:15:06.951Z"},{"name":"imgs","size":0,"content_type":null,"updated_at":"2026-04-12T01:15… |
+| 49 | ✅ | `list found files` | count=2 |
+| 50 | ✅ | `getPublicUrl returns URL` | https://api.somewhere.tech/v1/fs/c4458bf7-53f9-4aef-85ee-9bff40581acf/test-bucket/docs/hello.txt |
+| 51 | ✅ | `remove` | [{"name":"docs/hello.txt","size":0},{"name":"imgs/pixel.png","size":0}] |
+| 52 | ⚠️ | `download after remove (error)` | NOT_FOUND: Path not found. |
+| 53 | ✅ | `signUp` | {"user":{"id":"bbfe588f-3b76-49cb-b90b-78c5775fef1c","email":"test-ve32p4@example.com","display_name":null},"session":{"access_token":"eyJhbGciOiJIUzI1NiIsInR5c… |
+| 54 | ✅ | `signUp returned user+session` | yes |
+| 55 | ✅ | `getUser (post-signUp)` | {"user":{"id":"bbfe588f-3b76-49cb-b90b-78c5775fef1c","email":"test-ve32p4@example.com","display_name":null,"email_verified":0,"created_at":1775956508,"last_logi… |
+| 56 | ✅ | `getUser matches signUp email` | test-ve32p4@example.com |
+| 57 | ✅ | `getSession` | {"session":{"access_token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiYmZlNTg4Zi0zYjc2LTQ5Y2ItYjkwYi03OGM1Nzc1ZmVmMWMiLCJwcm9qZWN0X2lkIjoiYzQ0NThiZjctNTN… |
+| 58 | ✅ | `getSession has token` | yes |
+| 59 | ✅ | `updateUser` | {"user":{"id":"bbfe588f-3b76-49cb-b90b-78c5775fef1c","email":"test-ve32p4@example.com","display_name":"Tester ve32p4","email_verified":false,"created_at":177595… |
+| 60 | ✅ | `signOut` | null |
+| 61 | ✅ | `getSession post-signOut` | {"session":null} |
+| 62 | ✅ | `session cleared` | null |
+| 63 | ✅ | `signInWithPassword` | {"user":{"id":"bbfe588f-3b76-49cb-b90b-78c5775fef1c","email":"test-ve32p4@example.com","display_name":"Tester ve32p4"},"session":{"access_token":"eyJhbGciOiJIUz… |
+| 64 | ✅ | `signIn returned JWT` | yes |
+| 65 | ✅ | `from().select via user session (dual-auth)` | [{"id":1},{"id":2},{"id":3},{"id":4}] |
+| 66 | ✅ | `dual-auth query succeeded` | type=object |
+| 67 | ✅ | `emails.send (dev-only while user session active)` | {"id":"9eb3566d-5968-44a9-b148-fc6404f6a099"} |
+| 68 | ✅ | `resetPasswordForEmail` | {"sent":true} |
+| 69 | ✅ | `signInWithOAuth (google)` | {"provider":"google","url":"https://api.somewhere.tech/v1/auth/google?project_id=c4458bf7-53f9-4aef-85ee-9bff40581acf"} |
+| 70 | ✅ | `OAuth URL present` | https://api.somewhere.tech/v1/auth/google?project_id=c4458bf |
+| 71 | ⚠️ | `signInWithOAuth (github — unsupported)` | UNSUPPORTED_FEATURE: Provider github is not supported. Use 'google'. |
+| 72 | ✅ | `unsupported provider is error` | UNSUPPORTED_FEATURE |
+| 73 | ✅ | `setSession (rehydrate)` | {"session":{"access_token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiYmZlNTg4Zi0zYjc2LTQ5Y2ItYjkwYi03OGM1Nzc1ZmVmMWMiLCJwcm9qZWN0X2lkIjoiYzQ0NThiZjctNTN… |
+| 74 | ✅ | `getUser via rehydrated client` | {"user":{"id":"bbfe588f-3b76-49cb-b90b-78c5775fef1c","email":"test-ve32p4@example.com","display_name":"Tester ve32p4","email_verified":0,"created_at":1775956508… |
+| 75 | ✅ | `rehydrated user matches` | test-ve32p4@example.com |
+| 76 | ⚠️ | `signInWithPassword (wrong pass)` | AUTH_INVALID_CREDS: Wrong email or password for this project. |
+| 77 | ✅ | `wrong password is auth error` | AUTH_INVALID_CREDS |
+| 78 | ✅ | `emails.send (with html)` | {"id":"44b5702f-0f0d-4271-b019-934fcb7569ec"} |
+| 79 | ✅ | `chat.completions.create` | {"id":"chatcmpl-4g414z183c523x39616z2y6i","model":"claude-sonnet-4-6","content":"pong","usage":{"prompt_tokens":16,"completion_tokens":5,"total_tokens":21}} |
+| 80 | ✅ | `response.id starts with chatcmpl-` | chatcmpl-4g414z183c523x39616z2y6i |
+| 81 | ✅ | `response.model is returned` | claude-sonnet-4-6 |
+| 82 | ✅ | `usage.total_tokens = prompt + completion` | 21 |
+| 83 | ✅ | `cleanup` | project deleted |
