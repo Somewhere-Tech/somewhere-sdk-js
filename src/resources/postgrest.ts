@@ -15,46 +15,24 @@ import type { Result } from '../types.js';
  *       .eq('id', 1)
  *     const { data, error } = await sw.from('users').delete().eq('id', 1)
  *
- * The SDK translates the fluent chain to SQLite parameterized SQL and
- * routes it through `POST /v1/db/query`. All values travel as `?`
- * parameters — identifiers (table + column names) are validated against
- * a strict regex and quoted so there's no injection surface.
+ * The SDK sends structured JSON to `POST /v1/db/query`. The server builds
+ * the SQL — this SDK never generates or sees any SQL strings.
  */
 
-interface Filter {
-  op: FilterOp;
+interface StructuredFilter {
   column: string;
+  op: string;
   value: unknown;
 }
 
-type FilterOp = '=' | '!=' | '>' | '>=' | '<' | '<=' | 'LIKE' | 'ILIKE' | 'IS' | 'IN';
+interface OrderClause {
+  column: string;
+  ascending: boolean;
+}
 
 type ResolveType = 'many' | 'single' | 'maybeSingle';
 
 type Action = 'select' | 'insert' | 'update' | 'upsert' | 'delete';
-
-const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
-
-function quoteIdent(ident: string): string {
-  // Allow qualified `table.column` by splitting on the dot.
-  const parts = ident.split('.');
-  for (const p of parts) {
-    if (!IDENT_RE.test(p)) {
-      throw new Error(
-        `Somewhere: invalid identifier ${JSON.stringify(ident)}. ` +
-          `Only ASCII letters, digits, and underscores are allowed.`,
-      );
-    }
-  }
-  return parts.map((p) => `"${p}"`).join('.');
-}
-
-function splitColumns(columns: string): string[] {
-  return columns
-    .split(',')
-    .map((c) => c.trim())
-    .filter(Boolean);
-}
 
 function invalidResult<T>(err: SomewhereError): Result<T> {
   return { data: null, error: err, count: null, status: err.statusCode };
@@ -117,8 +95,8 @@ interface FilterBuilderState {
 export class PostgrestFilterBuilder
   implements PromiseLike<Result<unknown>>
 {
-  private readonly filters: Filter[] = [];
-  private orderBy: { column: string; ascending: boolean } | null = null;
+  private readonly filters: StructuredFilter[] = [];
+  private orderClause: OrderClause | null = null;
   private limitN: number | null = null;
   private offsetN: number | null = null;
   private resolveType: ResolveType = 'many';
@@ -133,59 +111,61 @@ export class PostgrestFilterBuilder
   /* ─── Filters ──────────────────────────────────────────────── */
 
   eq(column: string, value: unknown): this {
-    this.filters.push({ op: '=', column, value });
+    this.filters.push({ column, op: 'eq', value });
     return this;
   }
 
   neq(column: string, value: unknown): this {
-    this.filters.push({ op: '!=', column, value });
+    this.filters.push({ column, op: 'neq', value });
     return this;
   }
 
   gt(column: string, value: unknown): this {
-    this.filters.push({ op: '>', column, value });
+    this.filters.push({ column, op: 'gt', value });
     return this;
   }
 
   gte(column: string, value: unknown): this {
-    this.filters.push({ op: '>=', column, value });
+    this.filters.push({ column, op: 'gte', value });
     return this;
   }
 
   lt(column: string, value: unknown): this {
-    this.filters.push({ op: '<', column, value });
+    this.filters.push({ column, op: 'lt', value });
     return this;
   }
 
   lte(column: string, value: unknown): this {
-    this.filters.push({ op: '<=', column, value });
+    this.filters.push({ column, op: 'lte', value });
     return this;
   }
 
   /** Case-sensitive pattern match. Use `%` as the wildcard. */
   like(column: string, pattern: string): this {
-    this.filters.push({ op: 'LIKE', column, value: pattern });
+    this.filters.push({ column, op: 'like', value: pattern });
     return this;
   }
 
-  /** Case-insensitive pattern match. Compiled to `LIKE … COLLATE NOCASE`. */
+  /** Case-insensitive pattern match. */
   ilike(column: string, pattern: string): this {
-    this.filters.push({ op: 'ILIKE', column, value: pattern });
-    return this;
-  }
-
-  /** `.is('col', null)` → `col IS NULL`. `.is('col', true/false)` maps to 1/0. */
-  is(column: string, value: null | boolean): this {
-    if (value === null) {
-      this.filters.push({ op: 'IS', column, value: null });
-    } else {
-      this.filters.push({ op: '=', column, value: value ? 1 : 0 });
-    }
+    this.filters.push({ column, op: 'ilike', value: pattern });
     return this;
   }
 
   in(column: string, values: unknown[]): this {
-    this.filters.push({ op: 'IN', column, value: values });
+    this.filters.push({ column, op: 'in', value: values });
+    return this;
+  }
+
+  /** `.is('col', null)` → IS NULL. `.is('col', true/false)` for booleans. */
+  is(column: string, value: null | boolean): this {
+    this.filters.push({ column, op: 'is', value });
+    return this;
+  }
+
+  /** Negate a filter: `.not('status', 'eq', 'archived')`. */
+  not(column: string, op: string, value: unknown): this {
+    this.filters.push({ column, op: 'not', value: { op, value } });
     return this;
   }
 
@@ -203,7 +183,7 @@ export class PostgrestFilterBuilder
     column: string,
     options: { ascending?: boolean } = {},
   ): this {
-    this.orderBy = { column, ascending: options.ascending ?? true };
+    this.orderClause = { column, ascending: options.ascending ?? true };
     return this;
   }
 
@@ -248,31 +228,17 @@ export class PostgrestFilterBuilder
   }
 
   private async execute(): Promise<Result<unknown>> {
-    let sql: string;
-    let params: unknown[];
-    try {
-      ({ sql, params } = this.buildSql());
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return invalidResult(
-        new SomewhereError({
-          code: 'VALIDATION_ERROR',
-          message: msg,
-          statusCode: 400,
-          retry: false,
-          retryAfterMs: null,
-        }),
-      );
-    }
     const projectId = this.client.resolveProjectId();
+    const body = this.buildBody(projectId);
+
     try {
       const result = await this.client.call<{
-        columns?: string[];
-        rows?: Record<string, unknown>[];
-      }>('POST', '/db/query', {
-        body: { project_id: projectId, sql, params },
-      });
-      const rows = result?.rows ?? [];
+        data?: Record<string, unknown>[];
+        error?: string | null;
+        count?: number;
+      }>('POST', '/db/query', { body });
+
+      const rows = result?.data ?? [];
       return this.shapeRows(rows);
     } catch (err) {
       if (err instanceof SomewhereError) {
@@ -280,6 +246,58 @@ export class PostgrestFilterBuilder
       }
       throw err;
     }
+  }
+
+  private buildBody(projectId: string | undefined): Record<string, unknown> {
+    const base: Record<string, unknown> = {
+      project_id: projectId,
+      table: this.table,
+    };
+
+    if (this.filters.length > 0) {
+      base.filters = this.filters;
+    }
+
+    switch (this.action) {
+      case 'select': {
+        base.select = this.state.columns ?? '*';
+        if (this.orderClause) {
+          base.order = this.orderClause;
+        }
+        if (this.limitN != null) {
+          base.limit = this.limitN;
+        }
+        if (this.offsetN != null) {
+          base.offset = this.offsetN;
+        }
+        break;
+      }
+
+      case 'insert': {
+        const rows = this.state.insertValues ?? [];
+        base.insert = rows.length === 1 ? rows[0] : rows;
+        break;
+      }
+
+      case 'upsert': {
+        const rows = this.state.insertValues ?? [];
+        base.upsert = rows.length === 1 ? rows[0] : rows;
+        base.onConflict = this.state.conflictKey ?? 'id';
+        break;
+      }
+
+      case 'update': {
+        base.update = this.state.updateValues ?? {};
+        break;
+      }
+
+      case 'delete': {
+        base.delete = true;
+        break;
+      }
+    }
+
+    return base;
   }
 
   private shapeRows(rows: Record<string, unknown>[]): Result<unknown> {
@@ -315,117 +333,5 @@ export class PostgrestFilterBuilder
       return { data: rows[0], error: null, count: 1, status: 200 };
     }
     return { data: rows, error: null, count: rows.length, status: 200 };
-  }
-
-  private buildSql(): { sql: string; params: unknown[] } {
-    const table = quoteIdent(this.table);
-    const params: unknown[] = [];
-
-    switch (this.action) {
-      case 'select': {
-        const columns = this.state.columns ?? '*';
-        const cols =
-          columns.trim() === '*'
-            ? '*'
-            : splitColumns(columns).map(quoteIdent).join(', ');
-        let sql = `SELECT ${cols} FROM ${table}`;
-        sql += this.buildWhere(params);
-        if (this.orderBy) {
-          sql += ` ORDER BY ${quoteIdent(this.orderBy.column)} ${
-            this.orderBy.ascending ? 'ASC' : 'DESC'
-          }`;
-        }
-        if (this.limitN != null) sql += ` LIMIT ${Number(this.limitN) | 0}`;
-        if (this.offsetN != null) sql += ` OFFSET ${Number(this.offsetN) | 0}`;
-        return { sql, params };
-      }
-
-      case 'insert':
-      case 'upsert': {
-        const rows = this.state.insertValues ?? [];
-        if (rows.length === 0) {
-          throw new Error('insert/upsert: no rows supplied.');
-        }
-        const cols = Object.keys(rows[0]);
-        if (cols.length === 0) {
-          throw new Error('insert/upsert: first row has no columns.');
-        }
-        const colList = cols.map(quoteIdent).join(', ');
-        const rowPlaceholders = rows
-          .map(() => `(${cols.map(() => '?').join(', ')})`)
-          .join(', ');
-        for (const row of rows) {
-          for (const c of cols) {
-            params.push(row[c] ?? null);
-          }
-        }
-        let sql = `INSERT INTO ${table} (${colList}) VALUES ${rowPlaceholders}`;
-        if (this.action === 'upsert') {
-          const conflict = this.state.conflictKey ?? 'id';
-          const conflictCols = conflict
-            .split(',')
-            .map((c) => c.trim())
-            .filter(Boolean);
-          const conflictList = conflictCols.map(quoteIdent).join(', ');
-          const updateCols = cols.filter((c) => !conflictCols.includes(c));
-          if (updateCols.length === 0) {
-            sql += ` ON CONFLICT(${conflictList}) DO NOTHING`;
-          } else {
-            const setList = updateCols
-              .map((c) => `${quoteIdent(c)} = excluded.${quoteIdent(c)}`)
-              .join(', ');
-            sql += ` ON CONFLICT(${conflictList}) DO UPDATE SET ${setList}`;
-          }
-        }
-        sql += ' RETURNING *';
-        return { sql, params };
-      }
-
-      case 'update': {
-        const values = this.state.updateValues ?? {};
-        const cols = Object.keys(values);
-        if (cols.length === 0) {
-          throw new Error('update: no columns supplied.');
-        }
-        const setList = cols.map((c) => `${quoteIdent(c)} = ?`).join(', ');
-        for (const c of cols) params.push(values[c]);
-        let sql = `UPDATE ${table} SET ${setList}`;
-        sql += this.buildWhere(params);
-        sql += ' RETURNING *';
-        return { sql, params };
-      }
-
-      case 'delete': {
-        let sql = `DELETE FROM ${table}`;
-        sql += this.buildWhere(params);
-        sql += ' RETURNING *';
-        return { sql, params };
-      }
-
-      default:
-        throw new Error(`unknown action: ${this.action as string}`);
-    }
-  }
-
-  private buildWhere(params: unknown[]): string {
-    if (this.filters.length === 0) return '';
-    const clauses = this.filters.map((f) => {
-      const column = quoteIdent(f.column);
-      if (f.op === 'IS' && f.value === null) return `${column} IS NULL`;
-      if (f.op === 'IN') {
-        const values = f.value as unknown[];
-        if (values.length === 0) return '1 = 0';
-        const placeholders = values.map(() => '?').join(', ');
-        for (const v of values) params.push(v);
-        return `${column} IN (${placeholders})`;
-      }
-      if (f.op === 'ILIKE') {
-        params.push(f.value);
-        return `${column} LIKE ? COLLATE NOCASE`;
-      }
-      params.push(f.value);
-      return `${column} ${f.op} ?`;
-    });
-    return ` WHERE ${clauses.join(' AND ')}`;
   }
 }
