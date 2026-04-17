@@ -131,3 +131,187 @@ export interface SendEmailRequest {
 export interface SendEmailResponse {
   id: string;
 }
+
+/* ─── Payments (Stripe Connect, 5% platform fee) ─────────────────── */
+
+export interface PaymentsOnboardRequest {
+  /** Defaults to the client's default project. */
+  projectId?: string;
+  /** Where Stripe sends the user after the hosted onboarding completes. */
+  return_url?: string;
+  /** Where Stripe sends the user if the link expires before completion. */
+  refresh_url?: string;
+}
+
+export interface PaymentsOnboardResponse {
+  account_id: string;
+  onboarding_url: string;
+  /** RFC-3339 timestamp. The hosted link expires after a short window. */
+  expires_at: string;
+}
+
+export interface PaymentsStatusOptions {
+  projectId?: string;
+  /** When true, re-fetches state from upstream — slower but reconciles after onboarding return. */
+  refresh?: boolean;
+}
+
+export interface PaymentsStatusResponse {
+  connected: boolean;
+  account_id?: string;
+  onboarded: boolean;
+  charges_enabled: boolean;
+  payouts_enabled: boolean;
+  details_submitted?: boolean;
+  country?: string | null;
+  default_currency?: string | null;
+}
+
+export interface CheckoutLineItem {
+  /** Existing Stripe price id on the connected account. Mutually exclusive with the inline form. */
+  price?: string;
+  /** Inline amount in the smallest currency unit (cents). Pair with currency + name. */
+  amount?: number;
+  currency?: string;
+  name?: string;
+  quantity?: number;
+}
+
+export interface PaymentsCheckoutRequest {
+  projectId?: string;
+  line_items: CheckoutLineItem[];
+  mode?: 'payment' | 'subscription';
+  success_url: string;
+  cancel_url: string;
+  customer_email?: string;
+  metadata?: Record<string, string>;
+}
+
+export interface PaymentsCheckoutResponse {
+  session_id: string;
+  url: string;
+  amount_total_cents: number;
+  platform_fee_cents: number;
+  fee_percent: number;
+}
+
+export interface PaymentsDashboardLinkResponse {
+  url: string;
+}
+
+/* ─── Realtime (Supabase channels shape) ─────────────────────────── */
+
+export interface RealtimeBroadcastResponse {
+  delivered: number;
+  channel: string;
+}
+
+export interface RealtimeMetaResponse {
+  channel: string;
+  subscribers: number;
+  /** RFC-3339 timestamp or null if no message has been broadcast. */
+  last_message_at: string | null;
+}
+
+/* ─── Video (Cloudflare Stream wrapper) ──────────────────────────── */
+
+export interface VideoUploadUrlRequest {
+  projectId?: string;
+  title?: string;
+  /** Caps the longest video the upload URL will accept. Clamped 30–21600s. */
+  max_duration_seconds?: number;
+  require_signed_urls?: boolean;
+}
+
+export interface VideoUploadUrlResponse {
+  video_id: string;
+  upload_url: string;
+  max_duration_seconds: number;
+}
+
+export interface VideoObject {
+  id: string;
+  project_id: string;
+  title: string | null;
+  ready: boolean;
+  status: string;
+  size_bytes: number;
+  duration_seconds: number;
+  thumbnail: string;
+  preview: string;
+  hls_url: string;
+  dash_url: string;
+  /** RFC-3339 timestamp. */
+  created_at: string;
+  /** RFC-3339 timestamp. */
+  modified_at: string;
+}
+
+export interface VideoListResponse {
+  videos: VideoObject[];
+  count: number;
+}
+
+/* ─── Inbox (inbound email) ──────────────────────────────────────── */
+
+export interface InboxAddressCreateRequest {
+  projectId?: string;
+  /** Local-part only. The platform adds the inbox.{platform-domain} suffix. */
+  local: string;
+  label?: string;
+}
+
+export interface InboxAddress {
+  id: string;
+  project_id: string;
+  address: string;
+  label: string | null;
+  /** RFC-3339 timestamp. */
+  created_at: string;
+}
+
+export interface InboxAddressListResponse {
+  addresses: InboxAddress[];
+}
+
+export interface InboxMessageSummary {
+  id: string;
+  address_id: string;
+  project_id: string;
+  mail_from: string;
+  mail_to: string;
+  subject: string | null;
+  text_preview: string | null;
+  size_bytes: number;
+  /** RFC-3339 timestamp. */
+  received_at: string;
+}
+
+export interface InboxMessageListResponse {
+  messages: InboxMessageSummary[];
+  count: number;
+}
+
+export interface InboxMessageDetail extends InboxMessageSummary {
+  r2_key: string;
+  /** Sub-path on the API base URL that returns the raw .eml bytes. */
+  raw_url: string;
+}
+
+export interface InboxListOptions {
+  projectId?: string;
+  addressId?: string;
+  limit?: number;
+}
+
+/* ─── Calls (WebRTC SFU passthrough) ─────────────────────────────── */
+
+export interface CallsSessionCreateRequest {
+  projectId?: string;
+  thirdparty?: boolean;
+}
+
+export interface CallsSessionCreateResponse {
+  session_id: string;
+  project_id: string;
+}
