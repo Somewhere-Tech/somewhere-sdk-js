@@ -171,6 +171,128 @@ export class AuthClient {
     }
   }
 
+  /**
+   * Exchange a refresh token for a fresh `(access_token, refresh_token)` pair.
+   * Refresh tokens rotate — the old one is invalidated. Run this from your
+   * server, not browser code (the developer key is required).
+   */
+  async refreshSession(refreshToken?: string): Promise<Result<{ session: Session | null }>> {
+    const projectId = this.client.requireProjectId(undefined, 'auth.refreshSession');
+    const token = refreshToken ?? this.currentSession?.refresh_token;
+    if (!token) {
+      return {
+        data: { session: null },
+        error: new SomewhereError({
+          code: 'VALIDATION_ERROR',
+          message: 'No refresh_token in current session and none supplied.',
+          statusCode: 400,
+          retry: false,
+          retryAfterMs: null,
+        }),
+        status: 400,
+      };
+    }
+    try {
+      const result = await this.client.call<{
+        access_token: string;
+        refresh_token: string;
+        expires_in: number;
+        token_type: string;
+      }>('POST', '/auth/refresh', {
+        auth: 'developer',
+        body: { project_id: projectId, refresh_token: token },
+      });
+      this.client.setSessionToken(result.access_token);
+      // Re-fetch the user to keep the session shape consistent.
+      const me = await this.client.call<{ user: User }>('GET', '/auth/me');
+      const session: Session = {
+        access_token: result.access_token,
+        refresh_token: result.refresh_token,
+        expires_in: result.expires_in,
+        session_token: this.currentSession?.session_token,
+        user: me.user,
+      };
+      this.currentSession = session;
+      return { data: { session }, error: null, status: 200 };
+    } catch (err) {
+      if (err instanceof SomewhereError) {
+        return { data: { session: null }, error: err, status: err.statusCode };
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Change the password for the currently signed-in user. Pass
+   * `currentPassword` unless the user has never set one (e.g. signed up
+   * via Google). On success the platform wipes every session and refresh
+   * token for the user — they will need to log in again everywhere.
+   */
+  async updatePassword(params: {
+    newPassword: string;
+    currentPassword?: string;
+  }): Promise<Result<{ updated: true }>> {
+    try {
+      const body: Record<string, unknown> = { new_password: params.newPassword };
+      if (params.currentPassword !== undefined) body.current_password = params.currentPassword;
+      await this.client.call('POST', '/auth/update-password', { auth: 'session', body });
+      this.currentSession = null;
+      this.client.clearSession();
+      return { data: { updated: true }, error: null, status: 200 };
+    } catch (err) {
+      if (err instanceof SomewhereError) {
+        return { data: null, error: err, status: err.statusCode };
+      }
+      throw err;
+    }
+  }
+
+  /** Send the logged-in user a 6-digit email verification code. */
+  async resendVerification(): Promise<Result<{ sent: true }>> {
+    try {
+      await this.client.call('POST', '/auth/resend-verification', { auth: 'session', body: {} });
+      return { data: { sent: true }, error: null, status: 200 };
+    } catch (err) {
+      if (err instanceof SomewhereError) {
+        return { data: null, error: err, status: err.statusCode };
+      }
+      throw err;
+    }
+  }
+
+  /** Verify the 6-digit code that was emailed to the user. */
+  async verifyEmail(code: string): Promise<Result<{ verified: true }>> {
+    try {
+      await this.client.call('POST', '/auth/verify-email', { auth: 'session', body: { code } });
+      return { data: { verified: true }, error: null, status: 200 };
+    } catch (err) {
+      if (err instanceof SomewhereError) {
+        return { data: null, error: err, status: err.statusCode };
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Permanently delete the currently signed-in user. Wipes app_users
+   * row + sessions + refresh tokens + pending resets/verifications.
+   * App-level data your project stored about them is NOT touched —
+   * call your own cleanup before this.
+   */
+  async deleteAccount(): Promise<Result<{ deleted: true }>> {
+    try {
+      await this.client.call('DELETE', '/auth/users/me', { auth: 'session' });
+      this.currentSession = null;
+      this.client.clearSession();
+      return { data: { deleted: true }, error: null, status: 200 };
+    } catch (err) {
+      if (err instanceof SomewhereError) {
+        return { data: null, error: err, status: err.statusCode };
+      }
+      throw err;
+    }
+  }
+
   /** Trigger a password-reset email. */
   async resetPasswordForEmail(email: string): Promise<Result<{ sent: true }>> {
     const projectId = this.client.requireProjectId(undefined, 'auth.resetPasswordForEmail');
@@ -224,18 +346,23 @@ export class AuthClient {
       const result = await this.client.call<{
         user: User;
         token: string;
+        access_token?: string;
+        refresh_token?: string;
         session_token?: string;
+        expires_in?: number;
       }>(method, path, {
         auth: 'developer',
         body: { ...body, project_id: projectId },
       });
       const session: Session = {
-        access_token: result.token,
+        access_token: result.access_token ?? result.token,
+        refresh_token: result.refresh_token,
         session_token: result.session_token,
+        expires_in: result.expires_in,
         user: result.user,
       };
       this.currentSession = session;
-      this.client.setSessionToken(result.token);
+      this.client.setSessionToken(session.access_token);
       return { data: { user: result.user, session }, error: null, status: 200 };
     } catch (err) {
       if (err instanceof SomewhereError) {

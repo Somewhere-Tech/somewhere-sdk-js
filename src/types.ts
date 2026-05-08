@@ -47,7 +47,12 @@ export interface User {
 
 export interface Session {
   access_token: string;
+  /** Long-lived (30d) opaque refresh token. Use `auth.refreshSession()` to mint a new pair. */
+  refresh_token?: string;
+  /** Server-side session id; pass to `auth.signOut()` to revoke. */
   session_token?: string;
+  /** Seconds until `access_token` expires. */
+  expires_in?: number;
   user: User;
 }
 
