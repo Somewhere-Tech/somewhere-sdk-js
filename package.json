@@ -6,7 +6,7 @@
   "homepage": "https://somewhere.tech",
   "repository": { "type": "git", "url": "https://github.com/Somewhere-Tech/somewhere-sdk-js.git" },
   "license": "MIT",
-  "author": "somewhere.tech",
+  "author": { "name": "somewhere.tech", "email": "support@somewhere.tech" },
   "type": "module",
   "main": "./dist/cjs/index.cjs",
   "module": "./dist/esm/index.js",

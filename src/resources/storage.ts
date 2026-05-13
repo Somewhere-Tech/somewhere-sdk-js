@@ -1,7 +1,9 @@
 import type { Client } from '../client.js';
 import { SomewhereError } from '../errors.js';
 import type {
+  IntegrityCheckResult,
   Result,
+  SignedUrlResult,
   StorageDownloadResult,
   StorageFileObject,
   StorageUploadResult,
@@ -145,6 +147,38 @@ export class StorageFileApi {
     const fullPath = this.fullKey(path);
     const publicUrl = `${this.client.baseUrl}/fs/${enc(projectId)}/${encKey(fullPath)}`;
     return { data: { publicUrl } };
+  }
+
+  async signedUrl(
+    path: string,
+    options: { expiresIn?: number } = {},
+  ): Promise<Result<SignedUrlResult>> {
+    const projectId = this.requireProjectId('signedUrl');
+    const fullPath = this.fullKey(path);
+    try {
+      const body: Record<string, unknown> = { path: '/' + fullPath };
+      if (typeof options.expiresIn === 'number') body.expires_in = options.expiresIn;
+      const res = await this.client.call('POST', `/fs/${enc(projectId)}/sign`, body);
+      return { data: res as SignedUrlResult, error: null, status: 200 };
+    } catch (err) {
+      return toResultError(err);
+    }
+  }
+
+  async integrityCheck(
+    options: { autoClean?: boolean; limit?: number; cursor?: string } = {},
+  ): Promise<Result<IntegrityCheckResult>> {
+    const projectId = this.requireProjectId('integrityCheck');
+    try {
+      const body: Record<string, unknown> = {};
+      if (options.autoClean === true) body.auto_clean = true;
+      if (typeof options.limit === 'number') body.limit = options.limit;
+      if (typeof options.cursor === 'string') body.cursor = options.cursor;
+      const res = await this.client.call('POST', `/fs/${enc(projectId)}/integrity-check`, body);
+      return { data: res as IntegrityCheckResult, error: null, status: 200 };
+    } catch (err) {
+      return toResultError(err);
+    }
   }
 
   private fullKey(path: string): string {

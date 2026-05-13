@@ -86,6 +86,23 @@ export interface StorageDownloadResult {
   contentType: string;
 }
 
+export interface SignedUrlResult {
+  url: string;
+  token: string;
+  path: string;
+  expires_at: string;
+  expires_in: number;
+}
+
+export interface IntegrityCheckResult {
+  scanned: number;
+  orphan_files: Array<{ id: string; path: string; r2_key: string }>;
+  orphan_versions: Array<{ id: string; file_id: string; version: number; r2_key: string }>;
+  auto_clean: boolean;
+  cleaned: { files: number; versions: number };
+  next_cursor: string | null;
+}
+
 /* ─── Chat completions (OpenAI shape) ─────────────────────────── */
 
 export interface ChatMessage {
