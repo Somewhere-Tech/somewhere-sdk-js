@@ -18,7 +18,7 @@ export interface Task {
   id: string;
   title: string;
   description?: string;
-  status: 'open' | 'in_progress' | 'blocked' | 'done' | 'wont_fix';
+  status: 'backlog' | 'open' | 'in_progress' | 'blocked' | 'needs_review' | 'done' | 'archived';
   priority: 'low' | 'normal' | 'high' | 'urgent';
   assignee?: string | null;
   reporter?: string | null;
