@@ -154,7 +154,7 @@ export interface SendEmailResponse {
   id: string;
 }
 
-/* ─── Payments (Stripe Connect, 5% platform fee) ─────────────────── */
+/* ─── Payments (Stripe Connect, zero platform fee) ───────────────── */
 
 export interface PaymentsOnboardRequest {
   /** Defaults to the client's default project. */

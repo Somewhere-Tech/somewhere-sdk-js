@@ -13,10 +13,9 @@ import type {
  * Supabase Storage-style bucket API.
  *
  * Routes through `/v1/fs/*` (the platform's structured filesystem).
- * "Buckets" are prefix directories under the project's R2 namespace:
+ * "Buckets" are prefix directories under the project's file namespace:
  * `sw.storage.from('avatars').upload('a.png', ...)` writes to
- * `/v1/fs/{project_id}/avatars/a.png`. The caller never sees R2
- * paths, project IDs, or filesystem details.
+ * `/v1/fs/{project_id}/avatars/a.png`.
  */
 export class StorageClient {
   constructor(private readonly client: Client) {}

@@ -12,9 +12,9 @@ import type {
 
 /**
  * Stripe-Connect-style payments. The platform is the Stripe platform
- * account; each project gets its own connected account, and every charge
- * routes 5% to the platform via `application_fee_amount`. The developer
- * never holds a Stripe key — they call:
+ * account; each project gets its own connected account. somewhere.tech
+ * takes zero platform fee — every charge settles 100% to the developer's
+ * connected account. The developer never holds a Stripe key — they call:
  *
  *     await sw.payments.onboard({ return_url, refresh_url })
  *     // → redirect end-user to result.onboarding_url

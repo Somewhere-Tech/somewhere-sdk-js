@@ -1,8 +1,8 @@
 {
   "name": "@somewhere-tech/sdk",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Official JavaScript/TypeScript SDK for the somewhere.tech platform API.",
-  "keywords": ["somewhere", "somewhere.tech", "backend", "sdk", "d1", "r2", "cloudflare"],
+  "keywords": ["somewhere", "somewhere.tech", "backend", "sdk", "database", "auth", "storage", "ai", "supabase"],
   "homepage": "https://somewhere.tech",
   "repository": { "type": "git", "url": "https://github.com/Somewhere-Tech/somewhere-sdk-js.git" },
   "license": "MIT",

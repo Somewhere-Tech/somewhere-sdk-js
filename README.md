@@ -4,13 +4,17 @@ Official JavaScript/TypeScript SDK for the [somewhere.tech](https://somewhere.te
 
 One API shape per category. Match the dominant player exactly. No raw escape hatches.
 
-| Category | Copied from | Usage |
+| Category | Style | Usage |
 |---|---|---|
-| Database | Supabase | `sw.from('users').select('*').eq('id', 1)` |
+| Database | raw SQL | `sw.db.query('SELECT * FROM users WHERE id = $1', [id])` |
+| Database | Supabase | `sw.db.from('users').select('*').eq('id', 1)` (or `sw.from(...)`) |
+| Files | path-based | `sw.fs.write('avatar.png', bytes)` / `sw.fs.read(path)` |
 | Storage | Supabase Storage | `sw.storage.from('avatars').upload('a.png', file)` |
 | Auth | Supabase Auth | `sw.auth.signUp({ email, password })` |
 | Email | Resend | `sw.emails.send({ from, to, subject, html })` |
 | AI | OpenAI | `sw.chat.completions.create({ model, messages })` |
+| Payments | Stripe Connect | `sw.payments.checkout({ line_items, success_url })` |
+| Tasks | per-project ticketing | `sw.tasks.create({ title, priority: 'high' })` |
 
 ## Install
 
@@ -73,7 +77,7 @@ Every query returns `{ data, error, count, status }`. `error` is `null` on succe
 
 ## Storage — `sw.storage.from(bucket)`
 
-Supabase Storage bucket API. "Buckets" are name prefixes inside your project's R2 bucket — you never see raw paths.
+Supabase Storage bucket API. "Buckets" are name prefixes inside your project's file namespace — you never see raw paths.
 
 ```typescript
 const { data, error } = await sw.storage
