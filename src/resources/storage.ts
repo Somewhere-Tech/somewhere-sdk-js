@@ -164,6 +164,26 @@ export class StorageFileApi {
     }
   }
 
+  /**
+   * Supabase-exact alias of `signedUrl`. `createSignedUrl(path, expiresIn)`
+   * resolves to `{ data: { signedUrl, ...meta }, error }` — Supabase apps
+   * read `data.signedUrl`.
+   */
+  async createSignedUrl(
+    path: string,
+    expiresIn: number,
+  ): Promise<Result<SignedUrlResult & { signedUrl: string }>> {
+    const res = await this.signedUrl(path, { expiresIn });
+    if (res.error || !res.data) {
+      return { data: null, error: res.error, status: res.status };
+    }
+    return {
+      data: { ...res.data, signedUrl: res.data.url },
+      error: null,
+      status: res.status,
+    };
+  }
+
   async integrityCheck(
     options: { autoClean?: boolean; limit?: number; cursor?: string } = {},
   ): Promise<Result<IntegrityCheckResult>> {

@@ -41,6 +41,8 @@ function isBinaryBody(body: unknown): boolean {
  */
 export class Client {
   readonly baseUrl: string;
+  /** The project's own URL (functions host), if known. See SomewhereOptions.functionsUrl. */
+  readonly functionsUrl?: string;
   defaultProjectId?: string;
   private readonly initialAuthHeader: string;
   /** 'key' when the constructor got a developer `smt_` key; 'token' for an app-user JWT. */
@@ -63,6 +65,9 @@ export class Client {
       throw new Error('Somewhere: pass `key` OR `token`, not both.');
     }
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
+    this.functionsUrl = opts.functionsUrl
+      ? opts.functionsUrl.replace(/\/$/, '').replace(/\/v1$/, '')
+      : undefined;
     this.defaultProjectId = opts.projectId;
     this.initialAuthHeader = `Bearer ${opts.key ?? opts.token}`;
     this.initialAuthKind = opts.key ? 'key' : 'token';
@@ -104,6 +109,34 @@ export class Client {
 
   clearSession(): void {
     this.sessionAuthHeader = null;
+  }
+
+  /**
+   * The `Authorization` value a project-function or realtime call should
+   * carry: the active user session if signed in, else the construction
+   * key/token. Same precedence as `dual` mode.
+   */
+  get sessionOrInitialBearer(): string {
+    return this.sessionAuthHeader ?? this.initialAuthHeader;
+  }
+
+  /**
+   * Raw bearer token (no `Bearer ` prefix) for contexts that can't send
+   * an Authorization header — notably the realtime WebSocket, which takes
+   * the token as a `?token=` query param.
+   */
+  get realtimeToken(): string {
+    return this.sessionOrInitialBearer.replace(/^Bearer\s+/i, '');
+  }
+
+  /** REST base with the http(s) scheme swapped to ws(s) for realtime upgrades. */
+  get wsBaseUrl(): string {
+    return this.baseUrl.replace(/^http/i, 'ws');
+  }
+
+  /** Low-level fetch passthrough for absolute URLs (project function hosts). */
+  rawFetch(url: string, init: RequestInit): Promise<Response> {
+    return this.fetchImpl(url, init);
   }
 
   private authHeader(mode: AuthMode = 'dual'): string {

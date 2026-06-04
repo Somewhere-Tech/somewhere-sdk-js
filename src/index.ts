@@ -6,17 +6,21 @@ import { ChatClient } from './resources/chat.js';
 import { DbClient } from './resources/db.js';
 import { EmailsClient } from './resources/emails.js';
 import { FsClient } from './resources/fs.js';
+import { FunctionsClient } from './resources/functions.js';
 import { InboxClient } from './resources/inbox.js';
 import { PaymentsClient } from './resources/payments.js';
 import {
   PostgrestFilterBuilder,
   SomewhereQueryBuilder,
 } from './resources/postgrest.js';
-import { RealtimeClient } from './resources/realtime.js';
+import {
+  RealtimeChannelClient,
+  RealtimeClient,
+} from './resources/realtime.js';
 import { StorageClient, StorageFileApi } from './resources/storage.js';
 import { TasksClient } from './resources/tasks.js';
 import { VideoClient } from './resources/video.js';
-import type { SomewhereOptions } from './types.js';
+import type { CreateClientOptions, SomewhereOptions } from './types.js';
 
 export { SomewhereError } from './errors.js';
 export type { SomewhereErrorInit } from './errors.js';
@@ -28,9 +32,15 @@ export { AuthClient } from './resources/auth.js';
 export { DbClient } from './resources/db.js';
 export { EmailsClient } from './resources/emails.js';
 export { FsClient } from './resources/fs.js';
+export { FunctionsClient } from './resources/functions.js';
 export { ChatClient, ChatCompletionsClient } from './resources/chat.js';
 export { PaymentsClient } from './resources/payments.js';
-export { RealtimeClient, RealtimeChannelClient } from './resources/realtime.js';
+export {
+  RealtimeClient,
+  RealtimeChannelClient,
+  dispatchRealtimeFrame,
+} from './resources/realtime.js';
+export type { ChannelStatus } from './resources/realtime.js';
 export { VideoClient } from './resources/video.js';
 export { InboxClient, InboxAddressesClient, InboxMessagesClient } from './resources/inbox.js';
 export { CallsClient } from './resources/calls.js';
@@ -77,6 +87,7 @@ export class Somewhere {
   readonly chat: ChatClient;
   readonly payments: PaymentsClient;
   readonly realtime: RealtimeClient;
+  readonly functions: FunctionsClient;
   readonly video: VideoClient;
   readonly calls: CallsClient;
   readonly tasks: TasksClient;
@@ -94,6 +105,7 @@ export class Somewhere {
     this.chat = new ChatClient(this.client);
     this.payments = new PaymentsClient(this.client);
     this.realtime = new RealtimeClient(this.client);
+    this.functions = new FunctionsClient(this.client);
     this.video = new VideoClient(this.client);
     this.calls = new CallsClient(this.client);
     this.tasks = new TasksClient(this.client);
@@ -103,6 +115,97 @@ export class Somewhere {
   from(table: string): SomewhereQueryBuilder {
     return new SomewhereQueryBuilder(this.client, table);
   }
+
+  /**
+   * Supabase-style realtime channel entry point. Alias of
+   * `sw.realtime.channel(name)`:
+   *
+   *     sw.channel('room')
+   *       .on('broadcast', { event: 'message' }, ({ payload }) => { ... })
+   *       .subscribe()
+   */
+  channel(name: string, opts: { projectId?: string } = {}): RealtimeChannelClient {
+    return this.realtime.channel(name, opts);
+  }
 }
 
 export default Somewhere;
+
+/* ─── createClient — Supabase-compatible factory ─────────────────────── */
+
+/**
+ * Derive the project id from a `*.somewhere.tech` URL's subdomain. Returns
+ * `undefined` for custom domains / api hosts / bare hosts — the caller must
+ * then pass `projectId` explicitly (we never guess a project from a custom
+ * domain). The seam is loud: an unresolved project id surfaces as a clear
+ * error on the first call that needs one.
+ */
+export function projectIdFromUrl(url: string): string | undefined {
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+  if (!host.endsWith('.somewhere.tech')) return undefined;
+  const sub = host.slice(0, -'.somewhere.tech'.length);
+  // `api.somewhere.tech`, `www.`, or a deeper path aren't project subdomains.
+  if (!sub || sub.includes('.') || sub === 'api' || sub === 'www') return undefined;
+  return sub;
+}
+
+/**
+ * Supabase-compatible client factory. Mirrors `@supabase/supabase-js`:
+ *
+ *     import { createClient } from '@somewhere-tech/sdk'
+ *     const supabase = createClient(SOMEWHERE_URL, SOMEWHERE_KEY)
+ *
+ *     const { data, error } = await supabase.from('todos').select('*').eq('user_id', id)
+ *     await supabase.auth.signInWithPassword({ email, password })
+ *     supabase.storage.from('avatars').getPublicUrl('me.png')
+ *     supabase.channel('room').on('broadcast', { event: 'msg' }, fn).subscribe()
+ *     await supabase.functions.invoke('checkout', { body: { plan: 'pro' } })
+ *
+ * - `somewhereUrl` — your project's URL (`https://<project>.somewhere.tech`).
+ *   Used as the `functions.invoke` host and to infer the project id. For a
+ *   custom domain, pass `{ projectId }` in the options.
+ * - `somewhereKey` — an app-user JWT (browser/publishable) or a developer
+ *   `smt_` key (server-only). Detected by the `smt_` prefix.
+ *
+ * Database / auth / storage calls go to the platform REST base
+ * (`https://api.somewhere.tech/v1`, override with `options.apiUrl`).
+ */
+export function createClient(
+  somewhereUrl: string,
+  somewhereKey: string,
+  options: CreateClientOptions = {},
+): Somewhere {
+  if (!somewhereKey) {
+    throw new Error(
+      'createClient: a key is required — an app-user JWT (browser) or a ' +
+        'developer smt_ key (server-side only).',
+    );
+  }
+  const projectId = options.projectId ?? projectIdFromUrl(somewhereUrl);
+  const isDeveloperKey = somewhereKey.startsWith('smt_');
+  const functionsUrl =
+    options.functionsUrl ?? (isLikelyHttpUrl(somewhereUrl) ? somewhereUrl : undefined);
+
+  return new Somewhere({
+    ...(isDeveloperKey ? { key: somewhereKey } : { token: somewhereKey }),
+    projectId,
+    baseUrl: options.apiUrl,
+    functionsUrl,
+    fetch: options.fetch,
+    headers: options.headers,
+  });
+}
+
+function isLikelyHttpUrl(value: string): boolean {
+  try {
+    const u = new URL(value);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}

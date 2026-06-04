@@ -11,10 +11,73 @@ export interface SomewhereOptions {
   projectId?: string;
   /** Override the REST base URL. Defaults to `https://api.somewhere.tech/v1`. */
   baseUrl?: string;
+  /**
+   * The project's own URL (e.g. `https://my-app.somewhere.tech`), used as the
+   * host for `functions.invoke(name)` → `{functionsUrl}/api/{name}`. Set
+   * automatically when you build the client with `createClient(url, key)`.
+   * When omitted, `functions.invoke` derives `https://{projectId}.somewhere.tech`
+   * if `projectId` is a slug.
+   */
+  functionsUrl?: string;
   /** Inject a custom fetch implementation (tests, polyfills). */
   fetch?: FetchLike;
   /** Extra headers to attach to every request. */
   headers?: Record<string, string>;
+}
+
+/**
+ * Options for the Supabase-compatible `createClient(url, key, options?)`
+ * factory. Mirrors the ergonomics of `@supabase/supabase-js`'s third arg
+ * for the parts that map onto this platform.
+ */
+export interface CreateClientOptions {
+  /**
+   * Explicit project id, slug, or subdomain. Overrides the value derived
+   * from the URL's subdomain. **Required when the URL is a custom domain**
+   * (e.g. `https://myapp.com`) — we can't infer the project from it.
+   */
+  projectId?: string;
+  /** Override the platform REST base. Defaults to `https://api.somewhere.tech/v1`. */
+  apiUrl?: string;
+  /** Override the functions host. Defaults to the URL passed as the first argument. */
+  functionsUrl?: string;
+  /** Inject a custom fetch implementation (tests, non-browser runtimes). */
+  fetch?: FetchLike;
+  /** Extra headers attached to every platform request. */
+  headers?: Record<string, string>;
+}
+
+/** Options for `functions.invoke(name, options)`. Matches Supabase's shape. */
+export interface FunctionInvokeOptions {
+  /** Request body. Objects/arrays are JSON-encoded; strings/binary pass through. */
+  body?: unknown;
+  /** Extra request headers. */
+  headers?: Record<string, string>;
+  /** HTTP method. Defaults to `POST` (matching Supabase). */
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+}
+
+/**
+ * Auth state-change events, named to match `@supabase/supabase-js` so
+ * existing `onAuthStateChange` handlers port unchanged.
+ */
+export type AuthChangeEvent =
+  | 'INITIAL_SESSION'
+  | 'SIGNED_IN'
+  | 'SIGNED_OUT'
+  | 'TOKEN_REFRESHED'
+  | 'USER_UPDATED';
+
+/** Handle returned by `auth.onAuthStateChange` — call `unsubscribe()` to detach. */
+export interface AuthSubscription {
+  data: { subscription: { unsubscribe: () => void } };
+}
+
+/** Payload delivered to a `.on('broadcast', { event }, handler)` listener. */
+export interface RealtimeBroadcastPayload {
+  type: 'broadcast';
+  event: string;
+  payload: unknown;
 }
 
 /**

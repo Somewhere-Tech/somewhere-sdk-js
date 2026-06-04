@@ -1,6 +1,13 @@
 import type { Client } from '../client.js';
 import { SomewhereError } from '../errors.js';
-import type { AuthResponse, Result, Session, User } from '../types.js';
+import type {
+  AuthChangeEvent,
+  AuthResponse,
+  AuthSubscription,
+  Result,
+  Session,
+  User,
+} from '../types.js';
 
 /**
  * Supabase Auth-style client.
@@ -18,8 +25,58 @@ import type { AuthResponse, Result, Session, User } from '../types.js';
  */
 export class AuthClient {
   private currentSession: Session | null = null;
+  private readonly authListeners = new Set<
+    (event: AuthChangeEvent, session: Session | null) => void
+  >();
 
   constructor(private readonly client: Client) {}
+
+  /* ─── Auth state changes (Supabase-compatible) ─────────────── */
+
+  /**
+   * Subscribe to sign-in / sign-out / token-refresh / user-update events.
+   * Matches `@supabase/supabase-js` — the callback fires immediately with
+   * `('INITIAL_SESSION', currentSession)` (asynchronously), then on every
+   * later transition.
+   *
+   *     const { data: { subscription } } =
+   *       sw.auth.onAuthStateChange((event, session) => { ... })
+   *     // later: subscription.unsubscribe()
+   */
+  onAuthStateChange(
+    callback: (event: AuthChangeEvent, session: Session | null) => void,
+  ): AuthSubscription {
+    this.authListeners.add(callback);
+    // Supabase fires INITIAL_SESSION asynchronously after subscribe.
+    const fire = () => {
+      try {
+        callback('INITIAL_SESSION', this.currentSession);
+      } catch {
+        /* listener threw — never let it break the caller */
+      }
+    };
+    if (typeof queueMicrotask === 'function') queueMicrotask(fire);
+    else Promise.resolve().then(fire);
+    return {
+      data: {
+        subscription: {
+          unsubscribe: () => {
+            this.authListeners.delete(callback);
+          },
+        },
+      },
+    };
+  }
+
+  private emit(event: AuthChangeEvent): void {
+    for (const listener of this.authListeners) {
+      try {
+        listener(event, this.currentSession);
+      } catch {
+        /* listener threw — isolate it */
+      }
+    }
+  }
 
   /* ─── Sign up / in / out ───────────────────────────────────── */
 
@@ -85,10 +142,12 @@ export class AuthClient {
       }
       this.currentSession = null;
       this.client.clearSession();
+      this.emit('SIGNED_OUT');
       return { data: null, error: null, status: 200 };
     } catch (err) {
       this.currentSession = null;
       this.client.clearSession();
+      this.emit('SIGNED_OUT');
       if (err instanceof SomewhereError) {
         return { data: null, error: err, status: err.statusCode };
       }
@@ -138,6 +197,7 @@ export class AuthClient {
         user: result.user,
       };
       this.currentSession = fullSession;
+      this.emit('SIGNED_IN');
       return { data: { session: fullSession }, error: null, status: 200 };
     } catch (err) {
       this.client.clearSession();
@@ -162,6 +222,7 @@ export class AuthClient {
       if (this.currentSession) {
         this.currentSession = { ...this.currentSession, user: result.user };
       }
+      this.emit('USER_UPDATED');
       return { data: { user: result.user }, error: null, status: 200 };
     } catch (err) {
       if (err instanceof SomewhereError) {
@@ -213,6 +274,7 @@ export class AuthClient {
         user: me.user,
       };
       this.currentSession = session;
+      this.emit('TOKEN_REFRESHED');
       return { data: { session }, error: null, status: 200 };
     } catch (err) {
       if (err instanceof SomewhereError) {
@@ -238,6 +300,7 @@ export class AuthClient {
       await this.client.call('POST', '/auth/update-password', { auth: 'session', body });
       this.currentSession = null;
       this.client.clearSession();
+      this.emit('SIGNED_OUT');
       return { data: { updated: true }, error: null, status: 200 };
     } catch (err) {
       if (err instanceof SomewhereError) {
@@ -284,6 +347,7 @@ export class AuthClient {
       await this.client.call('DELETE', '/auth/users/me', { auth: 'session' });
       this.currentSession = null;
       this.client.clearSession();
+      this.emit('SIGNED_OUT');
       return { data: { deleted: true }, error: null, status: 200 };
     } catch (err) {
       if (err instanceof SomewhereError) {
@@ -363,6 +427,7 @@ export class AuthClient {
       };
       this.currentSession = session;
       this.client.setSessionToken(session.access_token);
+      this.emit('SIGNED_IN');
       return { data: { user: result.user, session }, error: null, status: 200 };
     } catch (err) {
       if (err instanceof SomewhereError) {
