@@ -176,6 +176,35 @@ async function main() {
     check('unknown type → 0', dispatchRealtimeFrame({ type: 'noise' }, regs) === 0);
   }
 
+  /* ── rpc(name, args) → functions.invoke ────────────────────────── */
+  console.log('rpc');
+  {
+    const rec = recorder(() => ({ json: { ok: true, total: 42 } }));
+    const sw = createClient('https://demo.somewhere.tech', 'eyJ.jwt', { fetch: rec.fetchImpl });
+    const res = await sw.rpc('compute_total', { user_id: 5 });
+    const call = rec.calls.at(-1);
+    await eq('rpc hits /api/{name}', call.url, 'https://demo.somewhere.tech/api/compute_total');
+    await eq('rpc forwards args as body', call.body, { user_id: 5 });
+    check('rpc returns {data,error}', res.error === null && res.data.total === 42);
+  }
+
+  /* ── .or() builds an or-group filter ───────────────────────────── */
+  console.log('from().or()');
+  {
+    const rec = recorder(() => ({ json: { ok: true, data: [] } }));
+    const sw = createClient('https://demo.somewhere.tech', 'eyJ.jwt', { fetch: rec.fetchImpl });
+    await sw.from('todos').select('*').or('status.eq.active,priority.gt.3,tag.in.(a,b)').eq('user_id', 5);
+    const body = rec.calls.at(-1).body;
+    const orFilter = body.filters.find((f) => f.op === 'or');
+    check('or filter present', !!orFilter);
+    await eq('or subs parsed + coerced', orFilter.value, [
+      { column: 'status', op: 'eq', value: 'active' },
+      { column: 'priority', op: 'gt', value: 3 },
+      { column: 'tag', op: 'in', value: ['a', 'b'] },
+    ]);
+    check('and-ed eq still present', body.filters.some((f) => f.column === 'user_id' && f.op === 'eq'));
+  }
+
   console.log('');
   if (failures > 0) {
     console.error(`❌ ${failures} assertion(s) failed`);

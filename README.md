@@ -119,8 +119,17 @@ const { data } = await sw.from('users').upsert({ email: 'a@b.com', name: 'Alice'
 const { data } = await sw.from('bookings').delete().eq('id', 42);
 ```
 
-**Filters**: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `in`, `is`, `match`.
+**Filters**: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `in`, `is`, `match`, `or`.
 **Modifiers**: `order`, `limit`, `range`, `single`, `maybeSingle`.
+
+```typescript
+// OR a set of conditions (Supabase syntax), AND-ed with the rest:
+const { data } = await sw
+  .from('todos')
+  .select('*')
+  .or('status.eq.active,priority.gt.3')
+  .eq('user_id', id);
+```
 
 Every query returns `{ data, error, count, status }`. `error` is `null` on success, `data` is `null` on error.
 
@@ -224,6 +233,13 @@ The function host is the `SOMEWHERE_URL` you passed to `createClient`
 `new Somewhere({ key, projectId })` form, the host is derived from a slug
 `projectId`; a UUID `projectId` returns a loud `NO_FUNCTION_HOST` error telling
 you to use `createClient(url, …)` or pass `functionsUrl`.
+
+`sw.rpc(name, args)` is the Supabase `rpc()` alias — there are no SQL stored
+procedures, so it calls your `api/<name>` function with `args` as the body:
+
+```typescript
+const { data, error } = await sw.rpc('compute_total', { user_id: id });
+```
 
 ## Email — `sw.emails.send(...)`
 

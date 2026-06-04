@@ -127,6 +127,18 @@ export class Somewhere {
   channel(name: string, opts: { projectId?: string } = {}): RealtimeChannelClient {
     return this.realtime.channel(name, opts);
   }
+
+  /**
+   * Supabase-style `rpc(name, args)`. On somewhere there are no SQL stored
+   * procedures — a "database function" is one of your deployed `api/<name>`
+   * functions. `rpc('foo', args)` therefore calls `POST {projectUrl}/api/foo`
+   * with `args` as the JSON body and returns `{ data, error }`. Identical to
+   * `functions.invoke(name, { body: args })`; provided so Supabase `rpc(...)`
+   * call sites port unchanged.
+   */
+  rpc<T = unknown>(name: string, args?: Record<string, unknown>) {
+    return this.functions.invoke<T>(name, args === undefined ? {} : { body: args });
+  }
 }
 
 export default Somewhere;

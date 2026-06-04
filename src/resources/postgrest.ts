@@ -38,6 +38,34 @@ function invalidResult<T>(err: SomewhereError): Result<T> {
   return { data: null, error: err, count: null, status: err.statusCode };
 }
 
+/** Split on top-level commas only — commas inside `(...)` (an `in` list) stay. */
+function splitTopLevel(s: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '(') depth++;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
+    else if (ch === ',' && depth === 0) {
+      out.push(s.slice(start, i));
+      start = i + 1;
+    }
+  }
+  out.push(s.slice(start));
+  return out;
+}
+
+/** Coerce an `.or()` string value to its JSON type (number / bool / null / string). */
+function coerceFilterValue(raw: string): unknown {
+  if (raw === 'null') return null;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  if (/^-?\d+$/.test(raw)) return Number.parseInt(raw, 10);
+  if (/^-?\d*\.\d+$/.test(raw)) return Number.parseFloat(raw);
+  return raw;
+}
+
 /** What `.from(...)` returns — pre-action chain. */
 export class SomewhereQueryBuilder {
   constructor(
@@ -174,6 +202,40 @@ export class PostgrestFilterBuilder
     for (const [k, v] of Object.entries(criteria)) {
       this.eq(k, v);
     }
+    return this;
+  }
+
+  /**
+   * OR a set of conditions (Supabase syntax). `.or('status.eq.active,age.gt.18')`
+   * → `(status = 'active' OR age > 18)`, AND-ed with any other filters.
+   * Each term is `column.operator.value`; `in` uses `col.in.(a,b,c)`. Numeric /
+   * `true` / `false` / `null` values are coerced to their JSON types.
+   */
+  or(filters: string): this {
+    const subs: StructuredFilter[] = [];
+    for (const raw of splitTopLevel(filters)) {
+      const term = raw.trim();
+      if (!term) continue;
+      // `in` values contain commas inside (...), so detect+consume them first.
+      const inMatch = /^([A-Za-z_][A-Za-z0-9_]*)\.in\.\((.*)\)$/.exec(term);
+      if (inMatch) {
+        subs.push({
+          column: inMatch[1],
+          op: 'in',
+          value: inMatch[2].split(',').map((v) => coerceFilterValue(v.trim())),
+        });
+        continue;
+      }
+      const firstDot = term.indexOf('.');
+      const secondDot = term.indexOf('.', firstDot + 1);
+      if (firstDot < 0 || secondDot < 0) continue; // malformed term — skip
+      subs.push({
+        column: term.slice(0, firstDot),
+        op: term.slice(firstDot + 1, secondDot),
+        value: coerceFilterValue(term.slice(secondDot + 1)),
+      });
+    }
+    this.filters.push({ column: '', op: 'or', value: subs });
     return this;
   }
 
