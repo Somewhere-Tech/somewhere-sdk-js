@@ -102,6 +102,16 @@ const { data } = await sw.from('bookings').select('id, name').order('created_at'
 const { data } = await sw.from('bookings').select('*').in('status', ['confirmed', 'pending']);
 const { data } = await sw.from('users').select('*').eq('id', 1).single();
 
+// Count — total matching rows (ignores limit/range), alongside the page:
+const { data, count } = await sw.from('bookings').select('*', { count: 'exact' }).limit(20);
+// Just the count, no rows fetched:
+const { count } = await sw.from('bookings').select('*', { count: 'exact', head: true }).eq('confirmed', 1);
+
+// Nested foreign-key select — embed related rows (Supabase syntax):
+const { data } = await sw.from('orders').select('*, customer(*)');     // belongs-to → object
+const { data } = await sw.from('users').select('*, posts(id, title)'); // has-many → array
+const { data } = await sw.from('orders').select('id, buyer:customer(name)'); // alias + narrowing
+
 // Insert
 const { data } = await sw.from('bookings').insert({ name: 'Alice', slot: '2026-05-01 18:00' });
 const { data } = await sw.from('bookings').insert([
@@ -121,6 +131,9 @@ const { data } = await sw.from('bookings').delete().eq('id', 42);
 
 **Filters**: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `in`, `is`, `match`, `or`.
 **Modifiers**: `order`, `limit`, `range`, `single`, `maybeSingle`.
+**Select options**: `select(cols, { count, head })` — `count: 'exact'` returns the total rows matching the filters (ignoring `limit`/`range`); add `head: true` to fetch the count without the rows.
+
+**Nested selects** embed related rows by convention: `table(cols)` (or `alias:table(cols)`). A `<table>_id` column on the base row resolves a *belongs-to* relation (attached as an object); otherwise it's treated as *has-many* via a `<base-singular>_id` column on the child (attached as an array). `single()` / `maybeSingle()` errors are surfaced through `error` with code `PGRST116`.
 
 ```typescript
 // OR a set of conditions (Supabase syntax), AND-ed with the rest:

@@ -34,6 +34,73 @@ type ResolveType = 'many' | 'single' | 'maybeSingle';
 
 type Action = 'select' | 'insert' | 'update' | 'upsert' | 'delete';
 
+/** Count mode for `select(cols, { count })`. Matches `@supabase/supabase-js`. */
+export type CountMode = 'exact' | 'planned' | 'estimated';
+
+/** A foreign-key embed parsed out of a nested select like `profile(*)`. */
+interface EmbedSpec {
+  /** Key the embedded result is attached under (the alias, or the table name). */
+  alias: string;
+  /** The related table to read from. */
+  table: string;
+  /** The columns to select on the embedded resource (`*` or a column list). */
+  columns: string;
+}
+
+/** Naive singularizer matching the server's table→interface convention. */
+function singularize(name: string): string {
+  return name.endsWith('s') && !name.endsWith('ss') ? name.slice(0, -1) : name;
+}
+
+/**
+ * Split a select string into base columns + foreign-key embeds.
+ *
+ *   '*, profile(*), posts(id, title)'
+ *     → { baseColumns: '*', embeds: [
+ *         { alias: 'profile', table: 'profile', columns: '*' },
+ *         { alias: 'posts',   table: 'posts',   columns: 'id, title' } ] }
+ *
+ * Embeds use Supabase's syntax: `table(cols)` or `alias:table(cols)`.
+ */
+function parseSelect(select: string): { baseColumns: string; embeds: EmbedSpec[] } {
+  const baseCols: string[] = [];
+  const embeds: EmbedSpec[] = [];
+  for (const raw of splitTopLevel(select)) {
+    const part = raw.trim();
+    if (!part) continue;
+    const m = /^(?:([A-Za-z_][A-Za-z0-9_]*)\s*:\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(([\s\S]*)\)$/.exec(part);
+    if (m) {
+      embeds.push({ alias: m[1] || m[2], table: m[2], columns: m[3].trim() || '*' });
+    } else {
+      baseCols.push(part);
+    }
+  }
+  return {
+    baseColumns: baseCols.length > 0 ? baseCols.join(', ') : '*',
+    embeds,
+  };
+}
+
+/** Add a column to a flat column list if it isn't already there. */
+function ensureColumn(columns: string, col: string): string {
+  if (columns === '*' || columns.includes('(')) return columns;
+  const cols = columns.split(',').map((s) => s.trim()).filter(Boolean);
+  if (!cols.includes(col)) cols.push(col);
+  return cols.join(', ');
+}
+
+/** Drop a join key we injected for stitching but the caller didn't ask for. */
+function stripInjectedColumn(
+  rows: Record<string, unknown>[],
+  requestedCols: string,
+  injectedCol: string,
+): void {
+  if (requestedCols === '*' || requestedCols.includes('(')) return;
+  const requested = new Set(requestedCols.split(',').map((s) => s.trim()).filter(Boolean));
+  if (requested.has(injectedCol)) return;
+  for (const r of rows) delete r[injectedCol];
+}
+
 function invalidResult<T>(err: SomewhereError): Result<T> {
   return { data: null, error: err, count: null, status: err.statusCode };
 }
@@ -73,9 +140,26 @@ export class SomewhereQueryBuilder {
     private readonly table: string,
   ) {}
 
-  select(columns = '*'): PostgrestFilterBuilder {
+  /**
+   * Select rows. Pass embeds in the column string for foreign-key joins
+   * (`select('*, profile(*)')`), and `{ count, head }` for counts:
+   *
+   *     // total rows matching the filters, alongside the page of data
+   *     const { data, count } = await sw.from('todos')
+   *       .select('*', { count: 'exact' }).eq('done', false).limit(20)
+   *
+   *     // just the count, no rows fetched
+   *     const { count } = await sw.from('todos')
+   *       .select('*', { count: 'exact', head: true }).eq('done', false)
+   */
+  select(
+    columns = '*',
+    options: { count?: CountMode; head?: boolean } = {},
+  ): PostgrestFilterBuilder {
     return new PostgrestFilterBuilder(this.client, this.table, 'select', {
       columns,
+      count: options.count,
+      head: options.head,
     });
   }
 
@@ -113,6 +197,8 @@ interface FilterBuilderState {
   insertValues?: Record<string, unknown>[];
   updateValues?: Record<string, unknown>;
   conflictKey?: string;
+  count?: CountMode;
+  head?: boolean;
 }
 
 /**
@@ -129,12 +215,30 @@ export class PostgrestFilterBuilder
   private offsetN: number | null = null;
   private resolveType: ResolveType = 'many';
 
+  /** Base columns (embeds stripped out) sent to the server. */
+  private readonly baseColumns: string;
+  /** Foreign-key embeds resolved client-side after the base query. */
+  private readonly embeds: EmbedSpec[];
+  private readonly countMode: CountMode | null;
+  private readonly headOnly: boolean;
+
   constructor(
     private readonly client: Client,
     private readonly table: string,
     private readonly action: Action,
     private readonly state: FilterBuilderState,
-  ) {}
+  ) {
+    if (action === 'select') {
+      const parsed = parseSelect(state.columns ?? '*');
+      this.baseColumns = parsed.baseColumns;
+      this.embeds = parsed.embeds;
+    } else {
+      this.baseColumns = state.columns ?? '*';
+      this.embeds = [];
+    }
+    this.countMode = state.count ?? null;
+    this.headOnly = state.head ?? false;
+  }
 
   /* ─── Filters ──────────────────────────────────────────────── */
 
@@ -300,13 +404,104 @@ export class PostgrestFilterBuilder
         count?: number;
       }>('POST', '/db/query', { body });
 
+      const serverCount = typeof result?.count === 'number' ? result.count : null;
+
+      // head:true → the count only, no rows (Supabase HEAD semantics).
+      if (this.headOnly) {
+        return { data: null, error: null, count: serverCount, status: 200 };
+      }
+
       const rows = result?.data ?? [];
-      return this.shapeRows(rows);
+
+      // Nested FK select — resolve each embed against the rows we got back,
+      // then narrow to the requested base columns.
+      if (this.action === 'select' && this.embeds.length > 0 && rows.length > 0) {
+        await this.resolveEmbeds(rows);
+        this.projectBaseColumns(rows);
+      }
+
+      return this.shapeRows(rows, serverCount);
     } catch (err) {
       if (err instanceof SomewhereError) {
         return invalidResult(err);
       }
       throw err;
+    }
+  }
+
+  /**
+   * Resolve every foreign-key embed by issuing one follow-up query per
+   * embed through the same `/db/query` path (so per-table user scoping
+   * still applies), then stitching the results onto the base rows.
+   *
+   * Relationship direction is inferred from the data, by convention:
+   *   - belongs-to (object): the base row has `<embed>_id` / `<embed-singular>_id`.
+   *     The embed is fetched by its `id` and attached as a single object.
+   *   - has-many (array): otherwise the child table is assumed to carry
+   *     `<base-singular>_id`; matching rows are attached as an array.
+   */
+  private async resolveEmbeds(rows: Record<string, unknown>[]): Promise<void> {
+    await Promise.all(this.embeds.map((embed) => this.resolveOneEmbed(rows, embed)));
+  }
+
+  private async resolveOneEmbed(
+    rows: Record<string, unknown>[],
+    embed: EmbedSpec,
+  ): Promise<void> {
+    const sample = rows[0];
+    const belongsToFk =
+      `${singularize(embed.table)}_id` in sample
+        ? `${singularize(embed.table)}_id`
+        : `${embed.table}_id` in sample
+          ? `${embed.table}_id`
+          : null;
+
+    if (belongsToFk) {
+      // belongs-to: base.<fk> → embed.id, attached as a single object.
+      const ids = [...new Set(rows.map((r) => r[belongsToFk]).filter((v) => v != null))];
+      const map = new Map<unknown, Record<string, unknown>>();
+      if (ids.length > 0) {
+        const res = await new PostgrestFilterBuilder(this.client, embed.table, 'select', {
+          columns: ensureColumn(embed.columns, 'id'),
+        }).in('id', ids);
+        const erows = ((res.data as Record<string, unknown>[] | null) ?? []);
+        // Key the map by id BEFORE stripping an injected id off the rows.
+        for (const er of erows) map.set(er.id, er);
+        stripInjectedColumn(erows, embed.columns, 'id');
+      }
+      for (const r of rows) r[embed.alias] = map.get(r[belongsToFk]) ?? null;
+      return;
+    }
+
+    // has-many: embed.<base-singular>_id → base.id, attached as an array.
+    const fk = `${singularize(this.table)}_id`;
+    const baseIds = [...new Set(rows.map((r) => r.id).filter((v) => v != null))];
+    const groups = new Map<unknown, Record<string, unknown>[]>();
+    if (baseIds.length > 0) {
+      const res = await new PostgrestFilterBuilder(this.client, embed.table, 'select', {
+        columns: ensureColumn(embed.columns, fk),
+      }).in(fk, baseIds);
+      const erows = ((res.data as Record<string, unknown>[] | null) ?? []);
+      for (const er of erows) {
+        const key = er[fk];
+        const arr = groups.get(key) ?? [];
+        arr.push(er);
+        groups.set(key, arr);
+      }
+      stripInjectedColumn(erows, embed.columns, fk);
+    }
+    for (const r of rows) r[embed.alias] = groups.get(r.id) ?? [];
+  }
+
+  /** Drop base columns the caller didn't request (we fetched `*` for embeds). */
+  private projectBaseColumns(rows: Record<string, unknown>[]): void {
+    if (this.baseColumns === '*') return;
+    const keep = new Set(this.baseColumns.split(',').map((s) => s.trim()).filter(Boolean));
+    for (const e of this.embeds) keep.add(e.alias);
+    for (const row of rows) {
+      for (const k of Object.keys(row)) {
+        if (!keep.has(k)) delete row[k];
+      }
     }
   }
 
@@ -322,7 +517,9 @@ export class PostgrestFilterBuilder
 
     switch (this.action) {
       case 'select': {
-        base.select = this.state.columns ?? '*';
+        // With embeds we fetch all base columns (so the join keys are
+        // present) and project down client-side after stitching.
+        base.select = this.embeds.length > 0 ? '*' : this.baseColumns;
         if (this.orderClause) {
           base.order = this.orderClause;
         }
@@ -331,6 +528,12 @@ export class PostgrestFilterBuilder
         }
         if (this.offsetN != null) {
           base.offset = this.offsetN;
+        }
+        if (this.countMode) {
+          base.count = this.countMode;
+        }
+        if (this.headOnly) {
+          base.head = true;
         }
         break;
       }
@@ -362,7 +565,10 @@ export class PostgrestFilterBuilder
     return base;
   }
 
-  private shapeRows(rows: Record<string, unknown>[]): Result<unknown> {
+  private shapeRows(
+    rows: Record<string, unknown>[],
+    serverCount: number | null,
+  ): Result<unknown> {
     if (this.resolveType === 'single') {
       if (rows.length === 0) {
         return invalidResult(
@@ -386,14 +592,14 @@ export class PostgrestFilterBuilder
           }),
         );
       }
-      return { data: rows[0], error: null, count: 1, status: 200 };
+      return { data: rows[0], error: null, count: serverCount ?? 1, status: 200 };
     }
     if (this.resolveType === 'maybeSingle') {
       if (rows.length === 0) {
-        return { data: null, error: null, count: 0, status: 200 };
+        return { data: null, error: null, count: serverCount ?? 0, status: 200 };
       }
-      return { data: rows[0], error: null, count: 1, status: 200 };
+      return { data: rows[0], error: null, count: serverCount ?? 1, status: 200 };
     }
-    return { data: rows, error: null, count: rows.length, status: 200 };
+    return { data: rows, error: null, count: serverCount ?? rows.length, status: 200 };
   }
 }

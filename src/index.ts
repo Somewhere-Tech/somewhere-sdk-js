@@ -27,6 +27,7 @@ export type { SomewhereErrorInit } from './errors.js';
 export type * from './types.js';
 export type { UploadOptions } from './resources/storage.js';
 export { PostgrestFilterBuilder, SomewhereQueryBuilder } from './resources/postgrest.js';
+export type { CountMode } from './resources/postgrest.js';
 export { StorageClient, StorageFileApi } from './resources/storage.js';
 export { AuthClient } from './resources/auth.js';
 export { DbClient } from './resources/db.js';
