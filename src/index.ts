@@ -154,7 +154,10 @@ export class Somewhere {
    *       .on('broadcast', { event: 'message' }, ({ payload }) => { ... })
    *       .subscribe()
    */
-  channel(name: string, opts: { projectId?: string } = {}): RealtimeChannelClient {
+  channel(
+    name: string,
+    opts: { projectId?: string; config?: { presence?: { key?: string } } } = {},
+  ): RealtimeChannelClient {
     return this.realtime.channel(name, opts);
   }
 

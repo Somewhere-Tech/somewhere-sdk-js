@@ -120,6 +120,46 @@ export interface RealtimeBroadcastPayload {
   payload: unknown;
 }
 
+/* ─── Realtime presence (Supabase shape) ─────────────────────────── */
+
+/** One member's presence: their tracked state plus a stable per-connection ref. */
+export interface Presence {
+  /** Unique per connection; clients de-dup / replace by this. */
+  presence_ref: string;
+  [key: string]: unknown;
+}
+
+/** `channel.presenceState()` — every present member, grouped by key. */
+export type RealtimePresenceState = Record<string, Presence[]>;
+
+/** Which presence lifecycle event a `.on('presence', { event })` listener wants. */
+export type PresenceEvent = 'sync' | 'join' | 'leave';
+
+/** Payload for `.on('presence', { event: 'sync' }, ...)` — read presenceState(). */
+export interface PresenceSyncPayload {
+  event: 'sync';
+}
+/** Payload for `.on('presence', { event: 'join' }, ...)`. */
+export interface PresenceJoinPayload {
+  event: 'join';
+  key: string;
+  /** The key's presences after the join. */
+  currentPresences: Presence[];
+  /** The presence(s) that just joined. */
+  newPresences: Presence[];
+}
+/** Payload for `.on('presence', { event: 'leave' }, ...)`. */
+export interface PresenceLeavePayload {
+  event: 'leave';
+  key: string;
+  /** The key's presences remaining after the leave (empty if the key is gone). */
+  currentPresences: Presence[];
+  /** The presence(s) that just left. */
+  leftPresences: Presence[];
+}
+
+export type PresencePayload = PresenceSyncPayload | PresenceJoinPayload | PresenceLeavePayload;
+
 /**
  * Every mutating call (db, storage, auth, emails) returns this shape —
  * matching Supabase / Resend exactly. `error` is null on success, and

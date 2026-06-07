@@ -25,7 +25,8 @@
     "build:cjs": "tsc -p tsconfig.cjs.json && node -e \"require('fs').writeFileSync('dist/cjs/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && node -e \"require('fs').renameSync('dist/cjs/index.js','dist/cjs/index.cjs')\"",
     "build:types": "tsc -p tsconfig.types.json",
     "clean": "rm -rf dist",
-    "test": "npm run build && tsc -p tsconfig.test.json && node test/unit-supabase-shape.mjs && node test/unit-query-builder.mjs && node test/unit-cookie-auth.mjs && node test/unit-cache.mjs && node --input-type=module -e \"import('./dist/esm/index.js').then(async (m) => { globalThis.__sw = m; await import('./test/run-basic.mjs'); })\"",
+    "test:realtime": "npm run build && node test/realtime-reconnect.test.mjs && node test/realtime-presence.test.mjs",
+    "test": "npm run build && tsc -p tsconfig.test.json && node test/unit-supabase-shape.mjs && node test/unit-query-builder.mjs && node test/unit-cookie-auth.mjs && node test/unit-cache.mjs && node test/realtime-reconnect.test.mjs && node test/realtime-presence.test.mjs && node --input-type=module -e \"import('./dist/esm/index.js').then(async (m) => { globalThis.__sw = m; await import('./test/run-basic.mjs'); })\"",
     "prepublishOnly": "npm run clean && npm run build"
   },
   "engines": { "node": ">=18" },
