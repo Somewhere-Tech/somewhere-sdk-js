@@ -49,9 +49,15 @@ export class FunctionsClient {
     const url = `${base}/api/${fn}`;
     const method = options.method ?? 'POST';
 
+    // Cookie-mode sessions (browser default): the httpOnly cookie carries
+    // the user's identity, so send credentials and OMIT Authorization —
+    // sw.auth.fromRequest prefers a Bearer header, and the static
+    // construction key would shadow the signed-in cookie user. An active
+    // header session (or explicit header mode) keeps the 0.5.x transport.
+    const cookieMode = this.client.authMode === 'cookie' && !this.client.hasSession;
     const headers: Record<string, string> = {
       Accept: 'application/json',
-      Authorization: this.client.sessionOrInitialBearer,
+      ...(cookieMode ? {} : { Authorization: this.client.sessionOrInitialBearer }),
       ...(options.headers ?? {}),
     };
 
@@ -70,7 +76,12 @@ export class FunctionsClient {
 
     let res: Response;
     try {
-      res = await this.client.rawFetch(url, { method, headers, body });
+      res = await this.client.rawFetch(url, {
+        method,
+        headers,
+        body,
+        ...(cookieMode ? { credentials: 'include' as RequestCredentials } : {}),
+      });
     } catch (err) {
       return errored(
         'NETWORK_ERROR',

@@ -43,6 +43,16 @@ export class Client {
   readonly baseUrl: string;
   /** The project's own URL (functions host), if known. See SomewhereOptions.functionsUrl. */
   readonly functionsUrl?: string;
+  /**
+   * Session transport for `auth.*` (tsk_0de555b1). 'cookie' = httpOnly cookie
+   * sessions via the app's own backend routes — the browser default, because
+   * localStorage tokens are XSS-exfiltratable and httpOnly cookies aren't.
+   * 'header' = Bearer tokens in SDK memory — the default outside browsers
+   * (Node/CLI/native have no httpOnly cookie jar) and the manual/advanced mode.
+   */
+  readonly authMode: 'cookie' | 'header';
+  /** Path the app's backend auth routes are mounted at (cookie mode). */
+  readonly authPath: string;
   defaultProjectId?: string;
   private readonly initialAuthHeader: string;
   /** 'key' when the constructor got a developer `smt_` key; 'token' for an app-user JWT. */
@@ -65,6 +75,9 @@ export class Client {
       throw new Error('Somewhere: pass `key` OR `token`, not both.');
     }
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
+    this.authMode =
+      opts.authMode ?? (typeof document !== 'undefined' ? 'cookie' : 'header');
+    this.authPath = (opts.authPath ?? '/api/auth').replace(/\/$/, '');
     this.functionsUrl = opts.functionsUrl
       ? opts.functionsUrl.replace(/\/$/, '').replace(/\/v1$/, '')
       : undefined;

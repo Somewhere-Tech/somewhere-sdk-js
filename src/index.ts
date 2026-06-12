@@ -211,6 +211,8 @@ export function createClient(
     functionsUrl,
     fetch: options.fetch,
     headers: options.headers,
+    authMode: options.authMode,
+    authPath: options.authPath,
   });
 }
 

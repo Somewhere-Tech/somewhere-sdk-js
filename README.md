@@ -70,12 +70,13 @@ export const supabase = createClient(
 
 Your app's `import { supabase } from './lib/supabase'` lines don't change.
 
-> **One seam to know about:** `auth.signInWithPassword` / `signUp` are
-> developer-gated on the platform, so from the browser (a JWT key) they return
-> a clear `INVALID_API_KEY` rather than logging in directly. Run them through a
-> tiny backend endpoint you host (see [Auth modes](#auth-modes-explained)), or
-> use [`@somewhere-tech/auth`](https://www.npmjs.com/package/@somewhere-tech/auth)
-> which ships that endpoint for you. Everything else — `from`, `storage`,
+> **Browser sign-in is cookie-mode by default (0.6.0):** in a browser,
+> `auth.signInWithPassword` / `signUp` post to your app's own auth routes
+> (`/api/auth/*` — the standard `sw.auth.loginWithCookie` backend handler,
+> see [Auth modes](#auth-modes-explained)), and the session lives in
+> httpOnly cookies. No token ever lands in JS or localStorage, wrong
+> passwords come back as `{ error }` with the real message, and the server
+> refreshes the session automatically. Everything else — `from`, `storage`,
 > `channel`, `functions`, `auth.getUser` — works directly from the browser.
 
 ### Server-side / explicit form
@@ -170,7 +171,18 @@ const { data } = await sw.storage.from('avatars').createSignedUrl('user-42.png',
 
 ## Auth — `sw.auth`
 
-Supabase Auth method names. After a successful `signUp` or `signInWithPassword` the SDK automatically uses the returned JWT for every dual-auth call (db, storage, auth.me). Developer-only endpoints (email, AI) keep using the `smt_` key.
+Supabase Auth method names, two transports:
+
+- **Cookie mode (browser default):** sign-in goes through your app's own
+  backend auth routes and the session is an httpOnly cookie — the SDK holds
+  no tokens at all. `getSession()` returns `{ cookie_session: true, user }`
+  (no readable tokens, by design). Requires the standard backend handler
+  (`sw.auth.loginWithCookie` et al) mounted at `/api/auth` — see
+  [Auth modes](#auth-modes-explained).
+- **Header mode (Node/CLI default, or `{ authMode: 'header' }`):** after a
+  successful `signUp` or `signInWithPassword` the SDK automatically uses the
+  returned JWT for every dual-auth call (db, storage, auth.me).
+  Developer-only endpoints (email, AI) keep using the `smt_` key.
 
 ```typescript
 const { data, error } = await sw.auth.signUp({ email, password });
@@ -327,11 +339,22 @@ const sw = new Somewhere({ token: 'eyJ...', projectId: 'booking-app' });
 
 When the server-side client successfully signs a user in, it automatically scopes its dual-auth calls (db, storage, auth.me) to the user's JWT while keeping developer-only calls (email, AI, auth.signUp) using the `smt_` key. This matches Supabase's behavior.
 
-For SPA patterns, the recommended flow is:
+For SPA patterns, the browser default is **cookie mode** (0.6.0):
 
-1. Browser calls a BFF endpoint you host.
-2. BFF calls `sw.auth.signInWithPassword(...)` with the `smt_` key and returns the resulting `session.access_token` to the browser.
-3. Browser constructs its own `new Somewhere({ token, projectId })` and makes direct calls from there.
+1. Mount the standard auth handler in your app's functions (one file —
+   `sw.auth.loginWithCookie` / `signupWithCookie` / `logoutWithCookie` /
+   `fromRequest`; `platform_help('auth-client')` has it verbatim) at
+   `/api/auth/*`.
+2. Browser calls `sw.auth.signInWithPassword({ email, password })` — the SDK
+   posts to your route, the response sets httpOnly cookies, and every
+   subsequent `functions.invoke` / `fetch(..., { credentials: 'include' })`
+   carries the session automatically. No tokens in JS, nothing in
+   localStorage, and the server refreshes the session in-band.
+
+Advanced / native (no httpOnly cookie jar): pass `{ authMode: 'header' }`
+and own the tokens yourself — the 0.5.x manual flow is unchanged. A
+cookie-preferring client whose backend returns tokens (an older handler)
+falls back to header mode automatically, so neither half breaks the other.
 
 ## Test
 

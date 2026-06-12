@@ -23,6 +23,21 @@ export interface SomewhereOptions {
   fetch?: FetchLike;
   /** Extra headers to attach to every request. */
   headers?: Record<string, string>;
+  /**
+   * Session transport for `auth.*`.
+   *
+   * - `'cookie'` (the BROWSER default) — sign-in goes through your app's own
+   *   backend auth routes (same origin, `authPath`), which set the session as
+   *   httpOnly cookies. No token ever lands in JS or localStorage — XSS can't
+   *   steal what the page can't read. Requires the standard backend handler
+   *   (`sw.auth.loginWithCookie` et al) mounted at `authPath`.
+   * - `'header'` (the default outside browsers, where httpOnly cookies don't
+   *   exist) — tokens held in SDK memory, `Authorization: Bearer` transport.
+   *   This is also the advanced/manual mode for native apps.
+   */
+  authMode?: 'cookie' | 'header';
+  /** Path your backend auth routes are mounted at (cookie mode). Default '/api/auth'. */
+  authPath?: string;
 }
 
 /**
@@ -45,6 +60,10 @@ export interface CreateClientOptions {
   fetch?: FetchLike;
   /** Extra headers attached to every platform request. */
   headers?: Record<string, string>;
+  /** Session transport for `auth.*` — see SomewhereOptions.authMode. Default: 'cookie' in browsers, 'header' elsewhere. */
+  authMode?: 'cookie' | 'header';
+  /** Path your backend auth routes are mounted at (cookie mode). Default '/api/auth'. */
+  authPath?: string;
 }
 
 /** Options for `functions.invoke(name, options)`. Matches Supabase's shape. */
@@ -109,13 +128,20 @@ export interface User {
 }
 
 export interface Session {
-  access_token: string;
+  /**
+   * The user's JWT — present in header mode only. A cookie session
+   * (`cookie_session: true`) deliberately has NO readable tokens: they live
+   * in httpOnly cookies the browser owns, invisible to JS by design.
+   */
+  access_token?: string;
   /** Long-lived (30d) opaque refresh token. Use `auth.refreshSession()` to mint a new pair. */
   refresh_token?: string;
   /** Server-side session id; pass to `auth.signOut()` to revoke. */
   session_token?: string;
   /** Seconds until `access_token` expires. */
   expires_in?: number;
+  /** True when the session is held as httpOnly cookies (browser default). */
+  cookie_session?: boolean;
   user: User;
 }
 
