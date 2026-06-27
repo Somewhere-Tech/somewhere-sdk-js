@@ -13,6 +13,7 @@ import {
   PostgrestFilterBuilder,
   SomewhereQueryBuilder,
 } from './resources/postgrest.js';
+import type { Result } from './types.js';
 import {
   RealtimeChannelClient,
   RealtimeClient,
@@ -28,6 +29,8 @@ export type * from './types.js';
 export type { UploadOptions } from './resources/storage.js';
 export { PostgrestFilterBuilder, SomewhereQueryBuilder } from './resources/postgrest.js';
 export type { CountMode } from './resources/postgrest.js';
+export { QueryCache } from './query-cache.js';
+export type { CacheOptions } from './query-cache.js';
 export { StorageClient, StorageFileApi } from './resources/storage.js';
 export { AuthClient } from './resources/auth.js';
 export { DbClient } from './resources/db.js';
@@ -115,6 +118,32 @@ export class Somewhere {
   /** Supabase-style query builder entry point. Alias of `sw.db.from(table)`. */
   from(table: string): SomewhereQueryBuilder {
     return new SomewhereQueryBuilder(this.client, table);
+  }
+
+  /**
+   * Warm the client cache for a query ahead of need — hover-prefetch, route
+   * preload, "load the next page while they read this one". Just runs the
+   * query (populating the instance cache); a later identical `.select()`
+   * within the staleTime window is then served instantly from cache.
+   *
+   *     sw.prefetch(sw.from('posts').select('*').eq('id', hoveredId))
+   *     // …on click, this is a cache hit, no network round-trip:
+   *     const { data } = await sw.from('posts').select('*').eq('id', hoveredId)
+   *
+   * No-op for cache effects when the client was created with `{ cache: false }`.
+   */
+  prefetch<T = unknown>(query: PromiseLike<Result<T>>): Promise<Result<T>> {
+    return Promise.resolve(query);
+  }
+
+  /**
+   * Drop cached `from().select()` reads for a table. Read-your-own-writes is
+   * already automatic (writes self-invalidate); reach for this to invalidate
+   * by hand — e.g. from a realtime event handler (the realtime-invalidation
+   * seam: `sw.channel('db:posts').on(..., () => sw.invalidate('posts'))`).
+   */
+  invalidate(table: string): void {
+    this.client.invalidateTable(table);
   }
 
   /**
@@ -213,6 +242,7 @@ export function createClient(
     headers: options.headers,
     authMode: options.authMode,
     authPath: options.authPath,
+    cache: options.cache,
   });
 }
 

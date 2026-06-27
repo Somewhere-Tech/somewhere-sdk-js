@@ -150,6 +150,8 @@ export class PostgrestFilterBuilder
   private limitN: number | null = null;
   private offsetN: number | null = null;
   private resolveType: ResolveType = 'many';
+  /** When true, this read bypasses the client cache and always hits the network. */
+  private freshOnly = false;
 
   private readonly countMode: CountMode | null;
   private readonly headOnly: boolean;
@@ -301,6 +303,17 @@ export class PostgrestFilterBuilder
     return this;
   }
 
+  /**
+   * Opt this read out of the client cache: always hit the network, ignoring
+   * any cached value (it still refreshes the cache for the next normal read).
+   * The per-query escape hatch for the rare always-fresh need;
+   * `createClient(url, key, { cache: false })` is the global one.
+   */
+  fresh(): this {
+    this.freshOnly = true;
+    return this;
+  }
+
   /* ─── Execution ────────────────────────────────────────────── */
 
   /**
@@ -319,6 +332,38 @@ export class PostgrestFilterBuilder
 
   private async execute(): Promise<Result<unknown>> {
     const projectId = this.client.resolveProjectId();
+    const cache = this.client.cache;
+
+    // Writes are never cached. On success they invalidate the table's cached
+    // reads so the next read is fresh (read-your-own-writes correctness).
+    if (this.action !== 'select') {
+      const result = await this.doFetch(projectId);
+      if (cache && result.error === null) {
+        cache.invalidate(this.table);
+      }
+      return result;
+    }
+
+    // Select with caching off (globally or via `.fresh()`): always hit the
+    // network. `.fresh()` still warms the cache for the next normal read.
+    if (!cache || this.freshOnly) {
+      const result = await this.doFetch(projectId);
+      if (cache && result.error === null) {
+        cache.store(this.cacheKey(projectId), this.table, result);
+      }
+      return result;
+    }
+
+    // Normal cached read: dedup + staleTime read-through.
+    return cache.read(this.cacheKey(projectId), this.table, () =>
+      this.doFetch(projectId),
+    );
+  }
+
+  /** The actual network round-trip — no cache involvement. */
+  private async doFetch(
+    projectId: string | undefined,
+  ): Promise<Result<unknown>> {
     const body = this.buildBody(projectId);
 
     try {
@@ -345,6 +390,24 @@ export class PostgrestFilterBuilder
       }
       throw err;
     }
+  }
+
+  /**
+   * Cache key for this select: every input that changes the result set —
+   * project + table + columns + filters + order + limit/offset + resolveType.
+   * Two builders that would produce identical SQL produce identical keys.
+   */
+  private cacheKey(projectId: string | undefined): string {
+    return JSON.stringify({
+      p: projectId,
+      t: this.table,
+      c: this.state.columns ?? '*',
+      f: this.filters,
+      o: this.orderClause,
+      l: this.limitN,
+      x: this.offsetN,
+      r: this.resolveType,
+    });
   }
 
   private buildBody(projectId: string | undefined): Record<string, unknown> {

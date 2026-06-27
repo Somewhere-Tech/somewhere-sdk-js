@@ -1,6 +1,15 @@
 import type { SomewhereError } from './errors.js';
+import type { CacheOptions } from './query-cache.js';
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+
+/**
+ * Client query-cache configuration. `from().select()` is cached by default.
+ * - omitted / `true` — on with defaults (~1s staleTime + request dedup).
+ * - `false` — off entirely; every read hits the network (pre-v0.5 semantics).
+ * - object — on, with the given {@link CacheOptions} (e.g. `{ staleTime }`).
+ */
+export type CacheConfig = boolean | CacheOptions;
 
 export interface SomewhereOptions {
   /** Developer `smt_` API key. Mutually exclusive with `token`. */
@@ -38,6 +47,12 @@ export interface SomewhereOptions {
   authMode?: 'cookie' | 'header';
   /** Path your backend auth routes are mounted at (cookie mode). Default '/api/auth'. */
   authPath?: string;
+  /**
+   * Client query cache for `from().select()`. On by default (~1s staleTime +
+   * request dedup + invalidate-on-write). Pass `false` to disable. See
+   * {@link CacheConfig}.
+   */
+  cache?: CacheConfig;
 }
 
 /**
@@ -64,6 +79,12 @@ export interface CreateClientOptions {
   authMode?: 'cookie' | 'header';
   /** Path your backend auth routes are mounted at (cookie mode). Default '/api/auth'. */
   authPath?: string;
+  /**
+   * Client query cache for `from().select()`. On by default. Pass `false` to
+   * disable, or an object to tune (e.g. `{ staleTime: 2000 }`). See
+   * {@link CacheConfig}.
+   */
+  cache?: CacheConfig;
 }
 
 /** Options for `functions.invoke(name, options)`. Matches Supabase's shape. */

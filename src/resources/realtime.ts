@@ -5,6 +5,13 @@ import type {
   RealtimeMetaResponse,
   Result,
 } from '../types.js';
+import {
+  backoffCeiling,
+  jitter,
+  buildSubscribeUrl,
+  frameSeq,
+  isControlFrame,
+} from './realtime-reconnect.js';
 
 /**
  * Supabase-style realtime channels. Each (project, channel) is its own
@@ -30,6 +37,12 @@ import type {
  * or inject one). Where it's absent, `.subscribe()` warns loudly and the
  * channel simply won't *receive* — `.send()` (which goes over REST) still
  * delivers to other subscribers.
+ *
+ * Resilience (tsk_e70c3713): `.subscribe()` AUTO-RECONNECTS with exponential
+ * backoff + jitter and re-subscribes the same channel when the socket drops
+ * (flaky mobile). It tracks the last message `seq` and resumes with
+ * `?since=<seq>`, so the server replays messages missed during the gap.
+ * `.unsubscribe()` is the only thing that stops reconnection.
  */
 
 type BroadcastListener = (payload: RealtimeBroadcastPayload) => void;
@@ -46,6 +59,13 @@ export class RealtimeChannelClient {
   private socket: WebSocket | null = null;
   private readonly registrations: Registration[] = [];
   private statusCb: ((status: ChannelStatus) => void) | null = null;
+  /** Highest message seq seen — the resume cursor sent on reconnect. */
+  private lastSeq: number | null = null;
+  /** Consecutive reconnect attempts (drives backoff); reset on a clean open. */
+  private reconnectAttempts = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Set by unsubscribe() — the one signal that suppresses auto-reconnect. */
+  private intentionallyClosed = false;
 
   constructor(
     private readonly client: Client,
@@ -76,9 +96,14 @@ export class RealtimeChannelClient {
     return this;
   }
 
-  /** Open the realtime WebSocket and dispatch incoming frames to `.on()` listeners. */
+  /**
+   * Open the realtime WebSocket and dispatch incoming frames to `.on()`
+   * listeners. Auto-reconnects with backoff (resuming via `?since`) until
+   * `.unsubscribe()` is called.
+   */
   subscribe(statusCb?: (status: ChannelStatus) => void): this {
     this.statusCb = statusCb ?? null;
+    this.intentionallyClosed = false;
 
     if (typeof WebSocket === 'undefined') {
       // Loud seam: no WebSocket in this runtime. Receiving won't work, but
@@ -93,19 +118,32 @@ export class RealtimeChannelClient {
       return this;
     }
 
+    this.openSocket();
+    return this;
+  }
+
+  /** Open (or re-open) the socket for this channel, resuming from lastSeq. */
+  private openSocket(): void {
     const projectId = this.client.requireProjectId(this.explicitProjectId, 'channel.subscribe');
     const token = this.client.realtimeToken;
-    const url =
-      `${this.client.wsBaseUrl}/realtime/subscribe` +
-      `?project_id=${encodeURIComponent(projectId)}` +
-      `&channel=${encodeURIComponent(this.channelName)}` +
-      `&token=${encodeURIComponent(token)}`;
+    const url = buildSubscribeUrl({
+      wsBaseUrl: this.client.wsBaseUrl,
+      projectId,
+      channel: this.channelName,
+      token,
+      since: this.lastSeq,
+    });
 
     try {
       const ws = new WebSocket(url);
       this.socket = ws;
-      ws.addEventListener('open', () => this.statusCb?.('SUBSCRIBED'));
+      ws.addEventListener('open', () => {
+        if (this.socket !== ws) return; // superseded by a newer socket
+        this.reconnectAttempts = 0; // clean connection — reset backoff
+        this.statusCb?.('SUBSCRIBED');
+      });
       ws.addEventListener('message', (ev: MessageEvent) => {
+        if (this.socket !== ws) return;
         if (typeof ev.data !== 'string') return;
         let frame: unknown;
         try {
@@ -113,14 +151,58 @@ export class RealtimeChannelClient {
         } catch {
           return;
         }
+        const seq = frameSeq(frame);
+        if (seq !== null) this.lastSeq = seq; // advance the resume cursor
+        if (isControlFrame(frame)) {
+          this.handleControlFrame(frame);
+          return;
+        }
         dispatchRealtimeFrame(frame, this.registrations);
       });
-      ws.addEventListener('close', () => this.statusCb?.('CLOSED'));
-      ws.addEventListener('error', () => this.statusCb?.('CHANNEL_ERROR'));
+      ws.addEventListener('close', () => {
+        if (this.socket !== ws) return;
+        this.statusCb?.('CLOSED');
+        this.scheduleReconnect();
+      });
+      ws.addEventListener('error', () => {
+        if (this.socket !== ws) return;
+        this.statusCb?.('CHANNEL_ERROR');
+        // A close event usually follows and drives the reconnect; if the
+        // runtime fires error WITHOUT close, schedule here too (idempotent).
+        this.scheduleReconnect();
+      });
     } catch {
       this.statusCb?.('CHANNEL_ERROR');
+      this.scheduleReconnect();
     }
-    return this;
+  }
+
+  /** Schedule one backoff-delayed reconnect (no-op if already pending/closed). */
+  private scheduleReconnect(): void {
+    if (this.intentionallyClosed || this.reconnectTimer) return;
+    const delay = jitter(backoffCeiling(this.reconnectAttempts));
+    this.reconnectAttempts += 1;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.intentionallyClosed) return;
+      this.openSocket();
+    }, delay);
+  }
+
+  /** Handle platform control frames (not delivered to broadcast listeners). */
+  private handleControlFrame(frame: unknown): void {
+    const f = frame as { type?: string; gap?: boolean; missed_from?: number; missed_to?: number };
+    if (f.type === 'sw_resume' && f.gap) {
+      // Fail loud: the server couldn't replay everything we missed (the
+      // gap fell outside its rewind window). Surface it so the app can
+      // refetch state rather than silently believing it's caught up.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[somewhere] channel "${this.channelName}" resumed with a gap: messages ` +
+          `${f.missed_from}–${f.missed_to} were beyond the replay window and ` +
+          'were not redelivered. Refetch state if you need them.',
+      );
+    }
   }
 
   /**
@@ -147,17 +229,25 @@ export class RealtimeChannelClient {
     return res.error ? 'error' : 'ok';
   }
 
-  /** Close the WebSocket and drop all listeners. */
+  /** Close the WebSocket, stop auto-reconnect, and drop all listeners. */
   unsubscribe(): void {
+    this.intentionallyClosed = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (this.socket) {
+      const ws = this.socket;
+      this.socket = null; // detach first so the close handler is a no-op
       try {
-        this.socket.close();
+        ws.close();
       } catch {
         /* already closing */
       }
-      this.socket = null;
     }
     this.registrations.length = 0;
+    this.lastSeq = null;
+    this.reconnectAttempts = 0;
   }
 
   /* ─── Server-side fan-out (existing surface, unchanged) ──────────── */

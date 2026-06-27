@@ -1,4 +1,5 @@
 import { SomewhereError } from './errors.js';
+import { QueryCache } from './query-cache.js';
 import type { FetchLike, Result, SomewhereOptions } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.somewhere.tech/v1';
@@ -66,6 +67,12 @@ export class Client {
   private sessionAuthHeader: string | null = null;
   private readonly fetchImpl: FetchLike;
   private readonly extraHeaders: Record<string, string>;
+  /**
+   * Instance-scoped query cache for `from().select()`, or `null` when the
+   * caller passed `{ cache: false }`. Consulted by the PostgrestFilterBuilder
+   * executor. Instance-scoped ⇒ auth-scoped (one client = one identity).
+   */
+  readonly cache: QueryCache | null;
 
   constructor(opts: SomewhereOptions) {
     if (!opts.key && !opts.token) {
@@ -90,6 +97,20 @@ export class Client {
       throw new Error('Somewhere: no fetch implementation found. Pass `fetch` explicitly.');
     }
     this.fetchImpl = f;
+    const cacheOpt = opts.cache;
+    this.cache =
+      cacheOpt === false
+        ? null
+        : new QueryCache(cacheOpt === true || cacheOpt === undefined ? {} : cacheOpt);
+  }
+
+  /**
+   * Drop cached `from().select()` reads for a table. Invoked automatically
+   * after a write to the table (read-your-own-writes); also the public seam
+   * for realtime-driven invalidation. No-op when the cache is disabled.
+   */
+  invalidateTable(table: string): void {
+    this.cache?.invalidate(table);
   }
 
   /** True when the client was constructed with a developer `smt_` key. */
