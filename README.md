@@ -8,6 +8,7 @@ One API shape per category. Match the dominant player exactly. No raw escape hat
 |---|---|---|
 | Database | raw SQL | `sw.db.query('SELECT * FROM users WHERE id = $1', [id])` |
 | Database | Supabase | `sw.from('users').select('*').eq('id', 1)` |
+| Caching | automatic | on by default — dedup + ~1s cache + invalidate-on-write |
 | Files | path-based | `sw.fs.write('avatar.png', bytes)` / `sw.fs.read(path)` |
 | Storage | Supabase Storage | `sw.storage.from('avatars').upload('a.png', file)` |
 | Auth | Supabase Auth | `sw.auth.signInWithPassword({ email, password })` |
@@ -132,6 +133,82 @@ const { data } = await sw
 ```
 
 Every query returns `{ data, error, count, status }`. `error` is `null` on success, `data` is `null` on error.
+
+## Caching — fast by default
+
+> **New in 0.5.0.** `from().select()` is cached automatically. Your app gets
+> faster with zero code — no React Query, no SWR, no manual cache layer. The
+> platform does it. See [docs/platform-intelligence.md](docs/platform-intelligence.md)
+> for the why.
+
+Three behaviours, all on by default, scoped to the client instance (so they're
+auth-scoped for free — one `createClient` = one identity = one cache):
+
+1. **Request dedup.** Two awaits of the same query while the first is still in
+   flight share **one** network request. Render the same list in three
+   components on one tick → one fetch.
+2. **~1s staleTime cache.** A repeat read within ~1 second returns the prior
+   result instead of refetching. The 1s window is deliberately short: normal
+   polling (>1s apart) stays fresh, only sub-second bursts coalesce.
+3. **Invalidate-on-write.** After an `insert`/`upsert`/`update`/`delete` on a
+   table, that table's cached reads are dropped — so the next read is fresh.
+   Read-your-own-writes stays correct.
+
+```typescript
+// Both calls fire on the same tick → ONE network request (dedup):
+const [a, b] = await Promise.all([
+  sw.from('todos').select('*').eq('done', false),
+  sw.from('todos').select('*').eq('done', false),
+]);
+
+// Read-your-own-writes: the write invalidates 'todos', so this read is fresh:
+await sw.from('todos').insert({ title: 'ship it' });
+const { data } = await sw.from('todos').select('*'); // hits the network
+```
+
+The cache key is `project + table + columns + filters + order + limit/offset +
+resolveType` — different filters are different entries; identical queries share.
+
+### Prefetch — warm the cache ahead of need
+
+```typescript
+// On hover, warm the detail query; the click is then an instant cache hit:
+onHover(() => sw.prefetch(sw.from('posts').select('*').eq('id', postId)));
+onClick(async () => {
+  const { data } = await sw.from('posts').select('*').eq('id', postId); // cache hit
+});
+```
+
+### Opting out
+
+```typescript
+// Per-query: always hit the network for this one read (still warms the cache):
+const { data } = await sw.from('rates').select('*').fresh();
+
+// Globally: turn the whole cache off (pre-0.5.0 semantics — every read fetches):
+const sw = createClient(SOMEWHERE_URL, SOMEWHERE_KEY, { cache: false });
+
+// Tune the staleTime instead of disabling:
+const sw = createClient(SOMEWHERE_URL, SOMEWHERE_KEY, { cache: { staleTime: 2000 } });
+```
+
+### Manual + realtime invalidation
+
+`client.invalidate(table)` drops a table's cached reads by hand. This is also
+the **seam for realtime-driven invalidation** — when realtime PG-change events
+land, a handler can call it to auto-refresh anything that table feeds:
+
+```typescript
+// Roadmap shape (realtime → cache auto-invalidation, not wired in 0.5.0):
+sw.channel('db:todos').on('postgres_changes', { event: '*' }, () => {
+  sw.invalidate('todos'); // next read of todos is fresh
+});
+```
+
+**Scope & limits.** Caching applies only to `from().select()` — raw
+`sw.db.query(sql, params)` is never cached. The cache is in-memory and
+per-client (no cross-tab/persistent storage) and resets when you create a new
+client.
 
 ## Storage — `sw.storage.from(bucket)`
 
