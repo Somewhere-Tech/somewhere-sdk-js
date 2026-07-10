@@ -149,6 +149,25 @@ try {
   ch2.unsubscribe();
   check('unsubscribe schedules NO reconnect', pendingTimers.filter(Boolean).length === 0);
   check('unsubscribe opens no new socket', FakeWebSocket.instances.length === 1);
+
+  /* ── additive protocol: legacy servers/frames keep working ──────── */
+  FakeWebSocket.instances = [];
+  pendingTimers = [];
+  const legacyReceived = [];
+  const legacy = new RealtimeChannelClient(fakeClient, 'room:legacy');
+  legacy.on('broadcast', { event: 'msg' }, (p) => legacyReceived.push(p.payload));
+  legacy.subscribe();
+  const legacyWs = FakeWebSocket.instances[0];
+  legacyWs.emit('open', {});
+  legacyWs.emit('message', {
+    data: JSON.stringify({ type: 'event', event: 'msg', data: { compatible: true } }),
+  });
+  check('legacy frame without seq still reaches listeners', legacyReceived[0]?.compatible === true);
+  legacyWs.emit('close', {});
+  flushTimers();
+  check('legacy reconnect still opens a replacement socket', FakeWebSocket.instances.length === 2);
+  check('legacy reconnect without a cursor omits since', !FakeWebSocket.instances[1].url.includes('since='));
+  legacy.unsubscribe();
 } finally {
   globalThis.WebSocket = realWS;
   globalThis.setTimeout = realSet;
