@@ -14,11 +14,12 @@ and `sw.fs`.
 environments have no browser cookie jar, so they use explicit bearer/refresh
 rotation.
 
-That is the whole map. `@somewhere-tech/auth` is the optional cookie-native
-UI/handler adapter. This SDK preserves Supabase-shaped APIs and non-browser
-platform access; its browser auth methods delegate to the same `/api/auth`
-cookie contract. Header auth and direct browser database/files calls are
-compatibility modes, not additional recommended architectures.
+That is the whole map. This one package now contains both the Supabase-shaped
+client and the optional cookie-native auth UI/handler adapter. Import only the
+subpath you use; the modules are tree-shakeable. Header auth and direct browser
+database/files calls are compatibility modes, not additional recommended
+architectures. `@somewhere-tech/auth` remains only as a non-breaking re-export
+shim for existing importers.
 
 | Category | Style | Usage |
 |---|---|---|
@@ -37,6 +38,15 @@ compatibility modes, not additional recommended architectures.
 
 ```bash
 npm install @somewhere-tech/sdk
+```
+
+One install, three focused entry points:
+
+```typescript
+import { createClient } from '@somewhere-tech/sdk';
+import { createSomewhereAuth } from '@somewhere-tech/sdk/auth';
+import { SomewhereAuthProvider, useAuth, SignedIn, SignedOut } from '@somewhere-tech/sdk/react';
+import { somewhereAuth } from '@somewhere-tech/sdk/server';
 ```
 
 ## Migration from Supabase
@@ -274,9 +284,10 @@ const { data } = await sw.storage.from('avatars').createSignedUrl('user-42.png',
 
 ## Auth — `sw.auth`
 
-Browser methods use the same `/api/auth` cookie adapter contract as
-`@somewhere-tech/auth`; the SDK retains its Supabase-shaped `{ data, error }`
-envelope:
+The root SDK retains its Supabase-shaped `{ data, error }` envelope. The
+tree-shakeable `@somewhere-tech/sdk/auth`, `/react`, and `/server` subpaths
+provide the complete cookie-native adapter formerly implemented in the
+standalone auth package:
 
 - **Cookie mode (browser default):** sign-in goes through your app's own
   backend auth routes and the session is an httpOnly cookie — the SDK holds
@@ -319,9 +330,9 @@ await sw.auth.resetPasswordForEmail('alice@example.com');
 await sw.auth.verifyPasswordReset({ token: 'from-email', newPassword: '...' });
 ```
 
-### Naming and result alignment
+### One package, two source-compatible API shapes
 
-| Intent | `@somewhere-tech/auth` | `@somewhere-tech/sdk` |
+| Intent | `@somewhere-tech/sdk/auth` | Root `@somewhere-tech/sdk` |
 |---|---|---|
 | Password sign-in | `signIn() → User` | `signInWithPassword()` or `signIn()` → `Result<AuthResponse>` |
 | Start passwordless | `sendMagicLink() → void` | `sendMagicLink()` → `Result<{sent:true}>` |
@@ -330,7 +341,8 @@ await sw.auth.verifyPasswordReset({ token: 'from-email', newPassword: '...' });
 | Historical password-reset name | — | deprecated `verifyOtp()` alias, retained under rule 9 |
 
 The transport and handler routes align; result envelopes remain intentionally
-different for source compatibility. See
+different for source compatibility. Existing `@somewhere-tech/auth` imports
+resolve to the left-hand SDK subpaths through the standalone shim. See
 [docs/auth-convergence.md](docs/auth-convergence.md) for the complete table and
 the changes that require a major version or founder sign-off.
 

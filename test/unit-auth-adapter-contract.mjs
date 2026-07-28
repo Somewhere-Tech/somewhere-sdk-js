@@ -1,0 +1,204 @@
+/**
+ * Exhaustive public-client ↔ server-adapter contract.
+ *
+ * This is deliberately a matrix, not a few hand-picked route tests. Adding a
+ * public client method without classifying and exercising its adapter contract
+ * must fail this suite before the package can publish again.
+ */
+import { createSomewhereAuth } from '@somewhere-tech/sdk/auth';
+import { somewhereAuth } from '@somewhere-tech/sdk/server';
+
+let passed = 0;
+let failed = 0;
+const check = (name, condition) => {
+  if (condition) {
+    passed++;
+    process.stdout.write(`OK   ${name}\n`);
+  } else {
+    failed++;
+    process.stdout.write(`FAIL ${name}\n`);
+  }
+};
+
+const authModule = await import('@somewhere-tech/sdk/auth');
+const reactModule = await import('@somewhere-tech/sdk/react');
+const serverModule = await import('@somewhere-tech/sdk/server');
+check('auth subpath exports the complete framework-agnostic runtime surface',
+  JSON.stringify(Object.keys(authModule).sort()) === JSON.stringify([
+    'AuthError',
+    'createSomewhereAuth',
+  ]));
+check('react subpath exports every provider, hook, gate, callback, and billing component',
+  JSON.stringify(Object.keys(reactModule).sort()) === JSON.stringify([
+    'AuthCallback',
+    'BillingPortal',
+    'Gate',
+    'PricingTable',
+    'Protect',
+    'SignedIn',
+    'SignedOut',
+    'SomewhereAuthProvider',
+    'useAuth',
+    'useAuthLoading',
+    'useEntitlements',
+    'useSession',
+    'useUser',
+  ]));
+check('server subpath exports the auth adapter handler',
+  JSON.stringify(Object.keys(serverModule).sort()) === JSON.stringify(['somewhereAuth']));
+
+const contract = [
+  { client: 'fetch', kind: 'passthrough' },
+  { client: 'signUp', route: 'POST /api/auth/signup', runtime: 'auth.signupWithCookie' },
+  { client: 'signIn', route: 'POST /api/auth/login', runtime: 'auth.loginWithCookie' },
+  { client: 'sendMagicLink', route: 'POST /api/auth/magic-link', runtime: 'auth.signInWithOtp' },
+  { client: 'verifyMagicLink', route: 'POST /api/auth/magic-link/verify', runtime: 'auth.verifyOtp' },
+  { client: 'googleSignInUrl', route: 'GET /api/auth/google-url', runtime: 'auth.googleUrl' },
+  { client: 'completeGoogleSignIn', route: 'POST /api/auth/google', runtime: 'auth.googleExchange' },
+  { client: 'githubSignInUrl', route: 'GET /api/auth/github-url', runtime: 'auth.githubUrl' },
+  { client: 'completeGithubSignIn', route: 'POST /api/auth/github', runtime: 'auth.githubExchange' },
+  { client: 'discordSignInUrl', route: 'GET /api/auth/discord-url', runtime: 'auth.discordUrl' },
+  { client: 'completeDiscordSignIn', route: 'POST /api/auth/discord', runtime: 'auth.discordExchange' },
+  { client: 'signOut', route: 'POST /api/auth/logout', runtime: 'auth.logoutWithCookie' },
+  { client: 'getUser', route: 'GET /api/auth/me', runtime: 'auth.fromRequest' },
+  { client: 'getSession', kind: 'local' },
+  { client: 'getCachedUser', kind: 'local' },
+  { client: 'onChange', kind: 'local' },
+  { client: 'billing.has', kind: 'local' },
+  { client: 'billing.entitlements', kind: 'local' },
+  { client: 'billing.plans', route: 'GET /api/auth/plans', runtime: 'billing.plans' },
+  { client: 'billing.subscribe', route: 'POST /api/auth/billing/checkout', runtime: 'payments.checkoutForUser' },
+  { client: 'billing.openBillingPortal', route: 'POST /api/auth/billing/portal', runtime: 'payments.portalForUser' },
+];
+
+const runtimeCalls = [];
+const routeCalls = [];
+const called = (name, result) => async (...args) => {
+  runtimeCalls.push({ name, args });
+  return typeof result === 'function' ? result(...args) : result;
+};
+const user = { id: 'u1', email: 'person@example.com', entitlements: ['export'] };
+const tokenBundle = { token: 'access', refresh_token: 'refresh', user };
+
+const sw = {
+  auth: {
+    signup: called('auth.signup', tokenBundle),
+    login: called('auth.login', tokenBundle),
+    signupWithCookie: called('auth.signupWithCookie', user),
+    loginWithCookie: called('auth.loginWithCookie', user),
+    logout: called('auth.logout', { ok: true }),
+    fromRequest: called('auth.fromRequest', user),
+    googleUrl: called('auth.googleUrl', { url: 'https://google.example/authorize' }),
+    googleExchange: called('auth.googleExchange', tokenBundle),
+    githubUrl: called('auth.githubUrl', { url: 'https://github.example/authorize' }),
+    githubExchange: called('auth.githubExchange', tokenBundle),
+    discordUrl: called('auth.discordUrl', { url: 'https://discord.example/authorize' }),
+    discordExchange: called('auth.discordExchange', tokenBundle),
+    signInWithOtp: called('auth.signInWithOtp', { ok: true }),
+    verifyOtp: called('auth.verifyOtp', tokenBundle),
+    setSessionCookies: (...args) => runtimeCalls.push({ name: 'auth.setSessionCookies', args }),
+    logoutWithCookie: called('auth.logoutWithCookie', { ok: true }),
+  },
+  billing: {
+    plans: called('billing.plans', { plans: [{ slug: 'pro', name: 'Pro' }] }),
+  },
+  payments: {
+    checkoutForUser: called('payments.checkoutForUser', { url: 'https://billing.example/checkout' }),
+    portalForUser: called('payments.portalForUser', { url: 'https://billing.example/portal' }),
+  },
+};
+
+globalThis.fetch = async (input, init = {}) => {
+  const req = input instanceof Request ? input : new Request(String(input), init);
+  const url = new URL(req.url);
+  routeCalls.push(`${req.method} ${url.pathname}`);
+  if (url.origin === 'https://app.example' && url.pathname.startsWith('/api/auth')) {
+    return somewhereAuth(req, sw);
+  }
+  return new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+};
+
+const storage = {
+  values: new Map(),
+  getItem(key) { return this.values.get(key) ?? null; },
+  setItem(key, value) { this.values.set(key, value); },
+  removeItem(key) { this.values.delete(key); },
+};
+const auth = createSomewhereAuth({ baseUrl: 'https://app.example', mode: 'cookie', storage });
+
+const actualMethods = [
+  ...Object.entries(auth).filter(([, value]) => typeof value === 'function').map(([name]) => name),
+  ...Object.entries(auth.billing).filter(([, value]) => typeof value === 'function').map(([name]) => `billing.${name}`),
+].sort();
+const matrixMethods = contract.map(({ client }) => client).sort();
+check('matrix classifies every advertised runtime method exactly once',
+  JSON.stringify(actualMethods) === JSON.stringify(matrixMethods));
+
+const invoke = {
+  fetch: () => auth.fetch('https://app.example/api/notes'),
+  signUp: () => auth.signUp({ email: user.email, password: 'password', displayName: 'Person' }),
+  signIn: () => auth.signIn({ email: user.email, password: 'password' }),
+  sendMagicLink: () => auth.sendMagicLink({ email: user.email, redirectUri: 'https://app.example/after-login' }),
+  verifyMagicLink: () => auth.verifyMagicLink({ token: 'magic-token' }),
+  googleSignInUrl: () => auth.googleSignInUrl(),
+  completeGoogleSignIn: () => auth.completeGoogleSignIn({ code: 'google-code' }),
+  githubSignInUrl: () => auth.githubSignInUrl(),
+  completeGithubSignIn: () => auth.completeGithubSignIn({ code: 'github-code' }),
+  discordSignInUrl: () => auth.discordSignInUrl(),
+  completeDiscordSignIn: () => auth.completeDiscordSignIn({ code: 'discord-code' }),
+  signOut: () => auth.signOut(),
+  getUser: () => auth.getUser(),
+  getSession: () => auth.getSession(),
+  getCachedUser: () => auth.getCachedUser(),
+  onChange: () => auth.onChange(() => {})(),
+  'billing.has': () => auth.billing.has('export'),
+  'billing.entitlements': () => auth.billing.entitlements(),
+  'billing.plans': () => auth.billing.plans(),
+  'billing.subscribe': () => auth.billing.subscribe('pro', { redirect: false }),
+  'billing.openBillingPortal': () => auth.billing.openBillingPortal({ redirect: false }),
+};
+
+// Exercise signOut after a cookie session exists, and getUser before signOut
+// clears the cached projection.
+const executionOrder = contract
+  .filter(({ client }) => client !== 'signOut')
+  .concat(contract.find(({ client }) => client === 'signOut'));
+
+for (const entry of executionOrder) {
+  const routeBefore = routeCalls.length;
+  const runtimeBefore = runtimeCalls.length;
+  await invoke[entry.client]();
+
+  if (entry.route) {
+    check(`${entry.client} reaches ${entry.route}`,
+      routeCalls.slice(routeBefore).includes(entry.route));
+    check(`${entry.client} delegates to ${entry.runtime}`,
+      runtimeCalls.slice(runtimeBefore).some(({ name }) => name === entry.runtime));
+  } else {
+    check(`${entry.client} is explicitly classified as ${entry.kind}`,
+      entry.kind === 'local' || entry.kind === 'passthrough');
+  }
+}
+
+const magicStart = runtimeCalls.find(({ name }) => name === 'auth.signInWithOtp');
+check('sendMagicLink forwards email + redirect_uri to signInWithOtp',
+  magicStart?.args[0]?.email === user.email
+    && magicStart?.args[0]?.redirect_uri === 'https://app.example/after-login');
+const magicVerify = runtimeCalls.find(({ name }) => name === 'auth.verifyOtp');
+check('verifyMagicLink forwards the token to verifyOtp',
+  magicVerify?.args[0]?.token === 'magic-token');
+check('default handler path is /api/auth',
+  routeCalls.some((route) => route === 'POST /api/auth/login')
+    && !routeCalls.some((route) => route.includes(' /auth/')));
+check('OAuth default callbacks stay under /api/auth',
+  ['auth.googleUrl', 'auth.githubUrl', 'auth.discordUrl'].every((name) => {
+    const call = runtimeCalls.find((candidate) => candidate.name === name);
+    return call?.args[0]?.redirect_uri === 'https://app.example/api/auth/callback';
+  }));
+
+process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
+if (failed > 0) process.exit(1);
+process.stdout.write('[ OK  @somewhere-tech/sdk ] exhaustive client ↔ adapter contract matrix verified\n');
