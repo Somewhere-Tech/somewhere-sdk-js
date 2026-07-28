@@ -78,6 +78,24 @@ async function main() {
     const call = rec.calls.at(-1);
     check('browser default = cookie mode (hits /api/auth/login)', call.url === '/api/auth/login');
   }
+  {
+    // The happy path no longer requires a placeholder browser JWT merely to
+    // construct the cookie client.
+    globalThis.document = {};
+    const rec = recorder((url) =>
+      url === '/api/auth/login' ? { json: { user: USER } } : { json: { ok: true } },
+    );
+    const sw = createClient('https://demo.somewhere.tech', undefined, { fetch: rec.fetchImpl });
+    await sw.auth.signIn({ email: USER.email, password: 'pw' });
+    const invoked = await sw.functions.invoke('notes', { body: {} });
+    delete globalThis.document;
+    check('browser cookie client constructs and signs in with zero credential',
+      rec.calls[0].url === '/api/auth/login' && !rec.calls[0].headers.Authorization);
+    check('credential-free functions.invoke rides cookies only',
+      rec.calls.at(-1).credentials === 'include'
+        && !rec.calls.at(-1).headers.Authorization
+        && invoked.error === null);
+  }
 
   /* ── cookie sign-in: transport + state ─────────────────────────── */
   console.log('cookie sign-in');
@@ -90,6 +108,8 @@ async function main() {
     check('POSTs the app route, not the platform', call.url === '/api/auth/login');
     check("sends credentials:'include'", call.credentials === 'include');
     check('sends NO Authorization header', !call.headers.Authorization);
+    check('uses the shared @somewhere-tech/auth cookie handshake',
+      call.headers['X-Sw-Auth-Mode'] === 'cookie');
     check('no error', error === null);
     check('returns the user', data?.user?.id === 'usr_1');
     check('session is cookie_session with no tokens', data?.session?.cookie_session === true && data?.session?.access_token === undefined);
@@ -237,6 +257,111 @@ async function main() {
     const { error } = await sw.auth.updateUser({ display_name: 'X' });
     check('updateUser teaches the backend-route fix', error?.code === 'COOKIE_MODE_BACKEND_ROUTE_REQUIRED');
     check('message names the docs topic', /auth-client/.test(error?.message ?? ''));
+  }
+
+  /* ── exhaustive auth method + shared-adapter contract matrix ───── */
+  console.log('auth contract matrix');
+  {
+    const { sw } = cookieClient(() => ({ json: { user: USER } }));
+    const internalMethods = new Set([
+      'cookieSession',
+      'setCookieUser',
+      'emit',
+      'runCookieSessionFlow',
+      'runCookieAction',
+      'cookieModeNeedsBackend',
+      'runAuthFlow',
+    ]);
+    const runtimeMethods = Object.getOwnPropertyNames(Object.getPrototypeOf(sw.auth))
+      .filter((name) => name !== 'constructor')
+      .filter((name) => typeof Object.getOwnPropertyDescriptor(Object.getPrototypeOf(sw.auth), name)?.value === 'function')
+      .filter((name) => !internalMethods.has(name))
+      .sort();
+    const methodMatrix = [
+      ['onAuthStateChange', 'local'],
+      ['signUp', 'adapter:POST /api/auth/signup'],
+      ['signInWithPassword', 'adapter:POST /api/auth/login'],
+      ['signIn', 'adapter:POST /api/auth/login'],
+      ['sendMagicLink', 'adapter:POST /api/auth/magic-link'],
+      ['verifyMagicLink', 'adapter:POST /api/auth/magic-link/verify'],
+      ['signInWithOAuth', 'platform-redirect'],
+      ['signOut', 'adapter:POST /api/auth/logout'],
+      ['getSession', 'local'],
+      ['getUser', 'adapter:GET /api/auth/me'],
+      ['setSession', 'compatibility:header'],
+      ['updateUser', 'compatibility:platform'],
+      ['refreshSession', 'cookie-probe-or-compatibility:header'],
+      ['updatePassword', 'compatibility:platform'],
+      ['resendVerification', 'compatibility:platform'],
+      ['verifyEmail', 'compatibility:platform'],
+      ['deleteAccount', 'compatibility:platform'],
+      ['resetPasswordForEmail', 'compatibility:platform'],
+      ['verifyPasswordReset', 'compatibility:platform'],
+      ['verifyOtp', 'deprecated-alias:verifyPasswordReset'],
+    ];
+    check('matrix classifies every advertised AuthClient method exactly once',
+      JSON.stringify(runtimeMethods) === JSON.stringify(methodMatrix.map(([name]) => name).sort()));
+
+    const adapterCases = [
+      ['signUp', (auth) => auth.signUp({ email: USER.email, password: 'pw' }), 'POST', '/api/auth/signup'],
+      ['signInWithPassword', (auth) => auth.signInWithPassword({ email: USER.email, password: 'pw' }), 'POST', '/api/auth/login'],
+      ['signIn', (auth) => auth.signIn({ email: USER.email, password: 'pw' }), 'POST', '/api/auth/login'],
+      ['sendMagicLink', (auth) => auth.sendMagicLink({ email: USER.email }), 'POST', '/api/auth/magic-link'],
+      ['verifyMagicLink', (auth) => auth.verifyMagicLink({ token: 'magic' }), 'POST', '/api/auth/magic-link/verify'],
+      ['getUser', (auth) => auth.getUser(), 'GET', '/api/auth/me'],
+    ];
+    for (const [name, invoke, method, path] of adapterCases) {
+      const current = cookieClient((url) =>
+        url === '/api/auth/magic-link' ? { json: { sent: true } } : { json: { user: USER } },
+      );
+      const result = await invoke(current.sw.auth);
+      const call = current.rec.calls.at(-1);
+      check(`${name} delegates to ${method} ${path}`,
+        call.method === method && call.url === path && result.error === null);
+    }
+
+    const logout = cookieClient((url) =>
+      url === '/api/auth/login' ? { json: { user: USER } } : { json: { ok: true } },
+    );
+    await logout.sw.auth.signIn({ email: USER.email, password: 'pw' });
+    await logout.sw.auth.signOut();
+    check('signOut delegates to POST /api/auth/logout',
+      logout.rec.calls.at(-1).method === 'POST' && logout.rec.calls.at(-1).url === '/api/auth/logout');
+  }
+
+  /* ── rule-9 browser data warning: warns, still works, functions stay clean ─ */
+  console.log('browser data compatibility warnings');
+  {
+    globalThis.document = {};
+    const warnings = [];
+    const originalWarn = console.warn;
+    console.warn = (message) => warnings.push(String(message));
+    const rec = recorder((url) => {
+      if (url.includes('/db/query')) return { json: { ok: true, data: { data: [] } } };
+      if (url.includes('/api/notes')) return { json: { ok: true } };
+      return { json: { ok: true, data: {} } };
+    });
+    const sw = createClient('https://demo.somewhere.tech', 'eyJ.jwt.token', {
+      fetch: rec.fetchImpl,
+      cache: false,
+    });
+    const dbResult = await sw.from('todos').select('*');
+    const removeResult = await sw.storage.from('avatars').remove(['a.png', 'b.png']);
+    const warningCountBeforeFunction = warnings.length;
+    const functionResult = await sw.functions.invoke('notes', { body: {} });
+    console.warn = originalWarn;
+    delete globalThis.document;
+
+    check('direct browser database access warns and still returns a Result',
+      warnings.some((message) => /browser database access.*deprecated compatibility mode/i.test(message))
+        && dbResult.error === null);
+    check('direct browser files access warns once and still works',
+      warnings.filter((message) => /browser files access.*deprecated compatibility mode/i.test(message)).length === 1
+        && removeResult.error === null && removeResult.data?.length === 2);
+    check('same-origin functions.invoke is the clean migration path',
+      warnings.length === warningCountBeforeFunction && functionResult.error === null);
+    check('warnings state the non-breaking rule-9 behavior',
+      warnings.every((message) => /This call still works/.test(message)));
   }
 
   /* ── advanced/manual mode is untouched ──────────────────────────── */

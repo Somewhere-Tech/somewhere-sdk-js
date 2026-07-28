@@ -211,30 +211,29 @@ export function projectIdFromUrl(url: string): string | undefined {
  * - `somewhereUrl` — your project's URL (`https://<project>.somewhere.tech`).
  *   Used as the `functions.invoke` host and to infer the project id. For a
  *   custom domain, pass `{ projectId }` in the options.
- * - `somewhereKey` — an app-user JWT (browser/publishable) or a developer
- *   `smt_` key (server-only). Detected by the `smt_` prefix.
+ * - `somewhereKey` — omit in a browser cookie app. For non-browser/
+ *   compatibility use, pass an app-user JWT or a developer `smt_` key
+ *   (server-only). Detected by the `smt_` prefix.
  *
  * Database / auth / storage calls go to the platform REST base
  * (`https://api.somewhere.tech/v1`, override with `options.apiUrl`).
  */
 export function createClient(
   somewhereUrl: string,
-  somewhereKey: string,
+  somewhereKey?: string,
   options: CreateClientOptions = {},
 ): Somewhere {
-  if (!somewhereKey) {
-    throw new Error(
-      'createClient: a key is required — an app-user JWT (browser) or a ' +
-        'developer smt_ key (server-side only).',
-    );
-  }
   const projectId = options.projectId ?? projectIdFromUrl(somewhereUrl);
-  const isDeveloperKey = somewhereKey.startsWith('smt_');
+  const isDeveloperKey = somewhereKey?.startsWith('smt_') ?? false;
   const functionsUrl =
     options.functionsUrl ?? (isLikelyHttpUrl(somewhereUrl) ? somewhereUrl : undefined);
 
   return new Somewhere({
-    ...(isDeveloperKey ? { key: somewhereKey } : { token: somewhereKey }),
+    ...(somewhereKey
+      ? isDeveloperKey
+        ? { key: somewhereKey }
+        : { token: somewhereKey }
+      : {}),
     projectId,
     baseUrl: options.apiUrl,
     functionsUrl,

@@ -12,9 +12,9 @@ export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 export type CacheConfig = boolean | CacheOptions;
 
 export interface SomewhereOptions {
-  /** Developer `smt_` API key. Mutually exclusive with `token`. */
+  /** Developer `smt_` API key. Mutually exclusive with `token`; omit for browser cookie auth. */
   key?: string;
-  /** App-user JWT (issued by `auth.signInWithPassword`). Mutually exclusive with `key`. */
+  /** App-user JWT for bearer/compatibility mode. Mutually exclusive with `key`; omit for browser cookie auth. */
   token?: string;
   /** Default `project_id` used by every query/storage/auth/emails/chat call. */
   projectId?: string;

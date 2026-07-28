@@ -19,7 +19,7 @@ import type {
  *
  * Method names match `@supabase/supabase-js` for the supported subset.
  *
- * TWO TRANSPORTS (see SomewhereOptions.authMode):
+ * ONLY-PATH CONTRACT (tsk_acd56ee8):
  *
  * - COOKIE (the browser default, 0.6.0): sign-in posts to your app's own
  *   backend auth routes (`authPath`, default '/api/auth' — the standard
@@ -30,13 +30,14 @@ import type {
  *   refreshes the cookie in-band on every request, so there is no client
  *   refresh logic at all.
  *
- * - HEADER (Node/CLI/native, or `authMode: 'header'`): the 0.5.x behavior.
+ * - HEADER (Node/CLI/native, or `authMode: 'header'`): compatibility/non-browser
+ *   behavior retained under rule 9.
  *   On successful `signUp` / `signInWithPassword` the SDK swaps its
  *   in-memory auth header to the returned access token, so subsequent calls
  *   (db, storage, chat, emails) run with the user's JWT. The caller owns
  *   persistence — this is the manual/advanced mode.
  *
- * Dual-mode: a cookie-preferring client whose backend replies with tokens
+ * Compatibility bridge: a cookie-preferring client whose backend replies with tokens
  * (an older/manual handler) falls back to header mode for that session, and
  * an explicitly adopted header session (`setSession`) keeps header
  * transport — nobody gets logged out by the default flip.
@@ -152,7 +153,7 @@ export class AuthClient {
     email: string;
     password: string;
   }): Promise<Result<AuthResponse>> {
-    if (this.cookieMode) return this.runCookieAuthFlow('/signup', credentials);
+    if (this.cookieMode) return this.runCookieSessionFlow('/signup', credentials);
     return this.runAuthFlow('POST', '/auth/signup', {
       email: credentials.email,
       password: credentials.password,
@@ -163,11 +164,57 @@ export class AuthClient {
     email: string;
     password: string;
   }): Promise<Result<AuthResponse>> {
-    if (this.cookieMode) return this.runCookieAuthFlow('/login', credentials);
+    if (this.cookieMode) return this.runCookieSessionFlow('/login', credentials);
     return this.runAuthFlow('POST', '/auth/login', {
       email: credentials.email,
       password: credentials.password,
     });
+  }
+
+  /** @somewhere-tech/auth-compatible alias. Result semantics stay SDK-shaped. */
+  async signIn(credentials: {
+    email: string;
+    password: string;
+  }): Promise<Result<AuthResponse>> {
+    return this.signInWithPassword(credentials);
+  }
+
+  /** Send a passwordless magic-link/OTP email through the shared auth contract. */
+  async sendMagicLink(input: {
+    email: string;
+    redirectUri?: string;
+  }): Promise<Result<{ sent: true }>> {
+    if (this.cookieMode) {
+      return this.runCookieAction('/magic-link', {
+        email: input.email,
+        redirect_uri: input.redirectUri,
+      });
+    }
+    const projectId = this.client.requireProjectId(undefined, 'auth.sendMagicLink');
+    try {
+      await this.client.call('POST', '/auth/magic-link', {
+        auth: 'developer',
+        body: {
+          project_id: projectId,
+          email: input.email,
+          redirect_uri: input.redirectUri,
+        },
+      });
+      return { data: { sent: true }, error: null, status: 200 };
+    } catch (err) {
+      if (err instanceof SomewhereError) {
+        return { data: null, error: err, status: err.statusCode };
+      }
+      throw err;
+    }
+  }
+
+  /** Complete passwordless sign-in; distinct from the legacy password-reset verifyOtp alias. */
+  async verifyMagicLink(input: { token: string }): Promise<Result<AuthResponse>> {
+    if (this.cookieMode) {
+      return this.runCookieSessionFlow('/magic-link/verify', { token: input.token });
+    }
+    return this.runAuthFlow('POST', '/auth/magic-link/verify', { token: input.token });
   }
 
   /**
@@ -530,11 +577,11 @@ export class AuthClient {
   }
 
   /** Complete a password reset using the token from the email. */
-  async verifyOtp(params: {
+  async verifyPasswordReset(params: {
     token: string;
     newPassword: string;
   }): Promise<Result<{ reset: true }>> {
-    const projectId = this.client.requireProjectId(undefined, 'auth.verifyOtp');
+    const projectId = this.client.requireProjectId(undefined, 'auth.verifyPasswordReset');
     try {
       await this.client.call('POST', '/auth/reset', {
         auth: 'developer',
@@ -553,6 +600,18 @@ export class AuthClient {
     }
   }
 
+  /**
+   * @deprecated This historical name verifies a password-reset token, not a
+   * magic-link/OTP sign-in. Use `verifyPasswordReset`; use `verifyMagicLink`
+   * for passwordless sign-in. Kept unchanged under rule 9.
+   */
+  async verifyOtp(params: {
+    token: string;
+    newPassword: string;
+  }): Promise<Result<{ reset: true }>> {
+    return this.verifyPasswordReset(params);
+  }
+
   /* ─── Internal ────────────────────────────────────────────── */
 
   /**
@@ -562,16 +621,22 @@ export class AuthClient {
    * expected failures (wrong password, duplicate email) come back as a
    * `Result` error with the server's real code + message.
    */
-  private async runCookieAuthFlow(
-    path: '/login' | '/signup',
-    credentials: { email: string; password: string },
+  private async runCookieSessionFlow(
+    path: '/login' | '/signup' | '/magic-link/verify',
+    payload: Record<string, unknown>,
   ): Promise<Result<AuthResponse>> {
     let res: Response;
     try {
       res = await this.client.rawFetch(this.client.authPath + path, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ email: credentials.email, password: credentials.password }),
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          // Shared with @somewhere-tech/auth/server. Raw *WithCookie handlers
+          // ignore it; the adapter uses it to withhold tokens from the body.
+          'X-Sw-Auth-Mode': 'cookie',
+        },
+        body: JSON.stringify(payload),
         credentials: 'include',
       } as RequestInit);
     } catch (err) {
@@ -646,6 +711,56 @@ export class AuthClient {
     this.setCookieUser(user);
     this.emit('SIGNED_IN');
     return { data: { user, session: this.cookieSession() }, error: null, status: 200 };
+  }
+
+  /** Cookie-mode action that does not itself establish a session. */
+  private async runCookieAction(
+    path: '/magic-link',
+    body: Record<string, unknown>,
+  ): Promise<Result<{ sent: true }>> {
+    try {
+      const res = await this.client.rawFetch(this.client.authPath + path, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'X-Sw-Auth-Mode': 'cookie',
+        },
+        body: JSON.stringify(body),
+        credentials: 'include',
+      } as RequestInit);
+      const responseBody = (await res.json().catch(() => null)) as
+        | { error?: string; message?: string; data?: { error?: string; message?: string } }
+        | null;
+      if (!res.ok) {
+        const detail = responseBody?.data ?? responseBody;
+        return {
+          data: null,
+          error: new SomewhereError({
+            code: detail?.error ?? 'AUTH_ERROR',
+            message: detail?.message ?? `Auth request failed (${res.status}).`,
+            statusCode: res.status,
+            retry: res.status >= 500,
+            retryAfterMs: null,
+            body: responseBody,
+          }),
+          status: res.status,
+        };
+      }
+      return { data: { sent: true }, error: null, status: res.status };
+    } catch (err) {
+      return {
+        data: null,
+        error: new SomewhereError({
+          code: 'NETWORK_ERROR',
+          message: err instanceof Error ? err.message : 'Network error reaching your auth route.',
+          statusCode: 0,
+          retry: true,
+          retryAfterMs: null,
+        }),
+        status: 0,
+      };
+    }
   }
 
   /**

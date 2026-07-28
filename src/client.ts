@@ -55,9 +55,9 @@ export class Client {
   /** Path the app's backend auth routes are mounted at (cookie mode). */
   readonly authPath: string;
   defaultProjectId?: string;
-  private readonly initialAuthHeader: string;
-  /** 'key' when the constructor got a developer `smt_` key; 'token' for an app-user JWT. */
-  private readonly initialAuthKind: 'key' | 'token';
+  private readonly initialAuthHeader: string | null;
+  /** Credential supplied at construction, or none for the browser cookie path. */
+  private readonly initialAuthKind: 'key' | 'token' | 'none';
   /**
    * Set by `auth.signInWithPassword` / `auth.signUp` on success.
    * Cleared by `auth.signOut`. Used by `dual` and `session` auth modes;
@@ -67,6 +67,9 @@ export class Client {
   private sessionAuthHeader: string | null = null;
   private readonly fetchImpl: FetchLike;
   private readonly extraHeaders: Record<string, string>;
+  /** Rule-9 warning state: existing browser data calls keep working, but each
+   * compatibility surface teaches the server-function migration once. */
+  private readonly browserDataWarnings = new Set<'database' | 'files'>();
   /**
    * Instance-scoped query cache for `from().select()`, or `null` when the
    * caller passed `{ cache: false }`. Consulted by the PostgrestFilterBuilder
@@ -75,22 +78,25 @@ export class Client {
   readonly cache: QueryCache | null;
 
   constructor(opts: SomewhereOptions) {
-    if (!opts.key && !opts.token) {
-      throw new Error('Somewhere: pass either `key` (smt_...) or `token` (app-user JWT).');
-    }
     if (opts.key && opts.token) {
       throw new Error('Somewhere: pass `key` OR `token`, not both.');
     }
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
     this.authMode =
       opts.authMode ?? (typeof document !== 'undefined' ? 'cookie' : 'header');
+    if (!opts.key && !opts.token && this.authMode !== 'cookie') {
+      throw new Error(
+        'Somewhere: bearer mode requires either `key` (smt_...) or `token` (app-user JWT).',
+      );
+    }
     this.authPath = (opts.authPath ?? '/api/auth').replace(/\/$/, '');
     this.functionsUrl = opts.functionsUrl
       ? opts.functionsUrl.replace(/\/$/, '').replace(/\/v1$/, '')
       : undefined;
     this.defaultProjectId = opts.projectId;
-    this.initialAuthHeader = `Bearer ${opts.key ?? opts.token}`;
-    this.initialAuthKind = opts.key ? 'key' : 'token';
+    const initialCredential = opts.key ?? opts.token;
+    this.initialAuthHeader = initialCredential ? `Bearer ${initialCredential}` : null;
+    this.initialAuthKind = opts.key ? 'key' : opts.token ? 'token' : 'none';
     this.extraHeaders = opts.headers ?? {};
     const f = opts.fetch ?? (globalThis as { fetch?: FetchLike }).fetch;
     if (!f) {
@@ -151,7 +157,19 @@ export class Client {
    * key/token. Same precedence as `dual` mode.
    */
   get sessionOrInitialBearer(): string {
-    return this.sessionAuthHeader ?? this.initialAuthHeader;
+    const header = this.sessionAuthHeader ?? this.initialAuthHeader;
+    if (!header) {
+      throw new SomewhereError({
+        code: 'BROWSER_SERVER_FUNCTION_REQUIRED',
+        message:
+          'This browser cookie client has no bearer credential. Call a same-origin server function ' +
+          'with `functions.invoke`; use sw.auth.fromRequest and sw.* inside that function.',
+        statusCode: 400,
+        retry: false,
+        retryAfterMs: null,
+      });
+    }
+    return header;
   }
 
   /**
@@ -186,7 +204,7 @@ export class Client {
           retryAfterMs: null,
         });
       }
-      return this.initialAuthHeader;
+      return this.initialAuthHeader!;
     }
     if (mode === 'session') {
       if (!this.sessionAuthHeader) {
@@ -203,7 +221,19 @@ export class Client {
       return this.sessionAuthHeader;
     }
     // dual
-    return this.sessionAuthHeader ?? this.initialAuthHeader;
+    const header = this.sessionAuthHeader ?? this.initialAuthHeader;
+    if (!header) {
+      throw new SomewhereError({
+        code: 'BROWSER_SERVER_FUNCTION_REQUIRED',
+        message:
+          'This browser cookie client has no bearer credential. Move the operation into a ' +
+          'same-origin server function and call it with `functions.invoke`.',
+        statusCode: 400,
+        retry: false,
+        retryAfterMs: null,
+      });
+    }
+    return header;
   }
 
   /** JSON request → JSON response. Unwraps `{ok, data}` → `data`, throws on error. */
@@ -216,6 +246,7 @@ export class Client {
       auth?: AuthMode;
     } = {},
   ): Promise<T> {
+    this.warnOnDirectBrowserDataAccess(path);
     const url = this.buildUrl(path, opts.query);
     const headers: Record<string, string> = {
       Authorization: this.authHeader(opts.auth ?? 'dual'),
@@ -278,6 +309,7 @@ export class Client {
     query?: Record<string, unknown>,
     auth: AuthMode = 'dual',
   ): Promise<{ body: ArrayBuffer; contentType: string }> {
+    this.warnOnDirectBrowserDataAccess(path);
     const url = this.buildUrl(path, query);
     let res: Response;
     try {
@@ -311,6 +343,7 @@ export class Client {
     contentType: string,
     auth: AuthMode = 'dual',
   ): Promise<T> {
+    this.warnOnDirectBrowserDataAccess(path);
     const url = this.buildUrl(path);
     let res: Response;
     try {
@@ -335,6 +368,30 @@ export class Client {
     }
     const parsed = await this.parseJson(res);
     return this.unwrap<T>(parsed, res.status);
+  }
+
+  /**
+   * Direct browser database/files calls are a deprecated compatibility mode.
+   * Rule 9 requires warn-first plus a working migration path: never reject or
+   * alter the request here. The same call continues immediately after the
+   * one-time warning.
+   */
+  private warnOnDirectBrowserDataAccess(path: string): void {
+    if (typeof document === 'undefined') return;
+    const surface =
+      path === '/db' || path.startsWith('/db/')
+        ? 'database'
+        : path === '/fs' || path.startsWith('/fs/') || path === '/storage' || path.startsWith('/storage/')
+          ? 'files'
+          : null;
+    if (!surface || this.browserDataWarnings.has(surface)) return;
+    this.browserDataWarnings.add(surface);
+    const runtime = surface === 'database' ? 'sw.db' : 'sw.fs';
+    globalThis.console?.warn?.(
+      `[@somewhere-tech/sdk] Direct browser ${surface} access is a deprecated compatibility mode. ` +
+        `This call still works. New browser apps should call a same-origin server function that uses ` +
+        `${runtime}, then invoke that function with the cookie session. See platform_help('auth-client').`,
+    );
   }
 
   private buildUrl(path: string, query?: Record<string, unknown>): string {

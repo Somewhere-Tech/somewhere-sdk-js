@@ -2,15 +2,29 @@
 
 Official JavaScript/TypeScript SDK for the [somewhere.tech](https://somewhere.tech) platform.
 
-One API shape per category. Match the dominant player exactly. No raw escape hatches.
+## The only authentication path
+
+**Browser app → cookie session.** The browser calls same-origin app functions;
+the server uses `sw.auth.*WithCookie` and `sw.auth.fromRequest`; credentials stay
+in httpOnly cookies and page JavaScript holds zero tokens or developer keys.
+Browser database and file work belongs in those server functions via `sw.db`
+and `sw.fs`.
+
+**Script, agent, CLI, server, or native app → bearer-token session.** These
+environments have no browser cookie jar, so they use explicit bearer/refresh
+rotation.
+
+That is the whole map. `@somewhere-tech/auth` is the optional cookie-native
+UI/handler adapter. This SDK preserves Supabase-shaped APIs and non-browser
+platform access; its browser auth methods delegate to the same `/api/auth`
+cookie contract. Header auth and direct browser database/files calls are
+compatibility modes, not additional recommended architectures.
 
 | Category | Style | Usage |
 |---|---|---|
-| Database | raw SQL | `sw.db.query('SELECT * FROM users WHERE id = $1', [id])` |
-| Database | Supabase | `sw.from('users').select('*').eq('id', 1)` |
+| Database | server/non-browser | `sw.db.query(...)` / `sw.from(...).select(...)` |
 | Caching | automatic | on by default — dedup + ~1s cache + invalidate-on-write |
-| Files | path-based | `sw.fs.write('avatar.png', bytes)` / `sw.fs.read(path)` |
-| Storage | Supabase Storage | `sw.storage.from('avatars').upload('a.png', file)` |
+| Files | server/non-browser | `sw.fs.write(...)` / `sw.storage.from(...)` |
 | Auth | Supabase Auth | `sw.auth.signInWithPassword({ email, password })` |
 | Realtime | Supabase channels | `sw.channel('room').on('broadcast', { event }, fn).subscribe()` |
 | Functions | Supabase invoke | `sw.functions.invoke('checkout', { body })` |
@@ -27,9 +41,10 @@ npm install @somewhere-tech/sdk
 
 ## Migration from Supabase
 
-Change one import. `createClient` has the same signature, returns the same
+Compatibility migration: change one import. `createClient` has the same signature, returns the same
 `{ data, error }` envelope, and exposes `from`, `auth`, `storage`, `channel`,
-and `functions` — so most call sites don't change at all:
+and `functions`, so existing call sites can keep working while browser
+database/files calls move behind same-origin server functions:
 
 ```typescript
 // Before
@@ -50,14 +65,14 @@ await supabase.functions.invoke('checkout', { body: { plan: 'pro' } });
 - **`SOMEWHERE_URL`** is your project's URL — `https://<project>.somewhere.tech`.
   It's the `functions.invoke` host and how the client infers your project id.
   On a custom domain, pass `{ projectId }`: `createClient(url, key, { projectId: 'my-app' })`.
-- **`SOMEWHERE_KEY`** is an app-user JWT (browser) or a developer `smt_` key
-  (server-only — never ship it to the browser). The `smt_` prefix is detected
-  automatically.
+- **`SOMEWHERE_KEY`** is an app-user JWT for compatibility/non-browser use or a
+  developer `smt_` key for server-only use. Never ship an `smt_` key to a
+  browser. New browser apps do not hold either credential after sign-in.
 
-### The drop-in shim (recommended migration path)
+### The drop-in shim (compatibility migration)
 
-Point your existing `./supabase` module at somewhere and **every call site keeps
-working unchanged**:
+Point an existing `./supabase` module at somewhere so call sites keep working
+during migration:
 
 ```typescript
 // src/lib/supabase.ts
@@ -77,8 +92,10 @@ Your app's `import { supabase } from './lib/supabase'` lines don't change.
 > see [Auth modes](#auth-modes-explained)), and the session lives in
 > httpOnly cookies. No token ever lands in JS or localStorage, wrong
 > passwords come back as `{ error }` with the real message, and the server
-> refreshes the session automatically. Everything else — `from`, `storage`,
-> `channel`, `functions`, `auth.getUser` — works directly from the browser.
+> refreshes the session automatically. `functions.invoke` and `auth.getUser`
+> use that cookie directly. Existing direct browser `from` / `storage` calls
+> remain functional but emit a migration warning; move them into server
+> functions using `sw.db` / `sw.fs`.
 
 ### Server-side / explicit form
 
@@ -94,6 +111,11 @@ const { data } = await sw.from('users').select('*');
 ## Database — `sw.from(table)`
 
 Supabase-style PostgREST query builder. Thenable — the chain doesn't hit the network until you `await` it.
+
+> **Browser compatibility warning:** these direct calls still execute, but the
+> SDK warns once because new browser apps should call a same-origin server
+> function that uses `sw.db`. The warning is informational; there is no removal
+> or runtime block in this release.
 
 ```typescript
 const sw = new Somewhere({ key: 'smt_...', projectId: 'booking-app' });
@@ -228,6 +250,10 @@ client.
 
 Supabase Storage bucket API. "Buckets" are name prefixes inside your project's file namespace — you never see raw paths.
 
+> **Browser compatibility warning:** direct file calls still execute and warn
+> once. New browser apps upload/read through a same-origin server function that
+> uses `sw.fs`; public and signed URLs remain appropriate browser capabilities.
+
 ```typescript
 const { data, error } = await sw.storage
   .from('avatars')
@@ -248,7 +274,9 @@ const { data } = await sw.storage.from('avatars').createSignedUrl('user-42.png',
 
 ## Auth — `sw.auth`
 
-Supabase Auth method names, two transports:
+Browser methods use the same `/api/auth` cookie adapter contract as
+`@somewhere-tech/auth`; the SDK retains its Supabase-shaped `{ data, error }`
+envelope:
 
 - **Cookie mode (browser default):** sign-in goes through your app's own
   backend auth routes and the session is an httpOnly cookie — the SDK holds
@@ -256,7 +284,7 @@ Supabase Auth method names, two transports:
   (no readable tokens, by design). Requires the standard backend handler
   (`sw.auth.loginWithCookie` et al) mounted at `/api/auth` — see
   [Auth modes](#auth-modes-explained).
-- **Header mode (Node/CLI default, or `{ authMode: 'header' }`):** after a
+- **Header compatibility/non-browser mode (Node/CLI default, or `{ authMode: 'header' }`):** after a
   successful `signUp` or `signInWithPassword` the SDK automatically uses the
   returned JWT for every dual-auth call (db, storage, auth.me).
   Developer-only endpoints (email, AI) keep using the `smt_` key.
@@ -264,6 +292,9 @@ Supabase Auth method names, two transports:
 ```typescript
 const { data, error } = await sw.auth.signUp({ email, password });
 const { data, error } = await sw.auth.signInWithPassword({ email, password });
+const { data, error } = await sw.auth.signIn({ email, password }); // additive alias
+await sw.auth.sendMagicLink({ email, redirectUri: '/after-login' });
+await sw.auth.verifyMagicLink({ token });
 const { data, error } = await sw.auth.signInWithOAuth({ provider: 'google' });
 // data.url — redirect the browser there
 const { data, error } = await sw.auth.signOut();
@@ -278,15 +309,30 @@ const { data: { subscription } } = sw.auth.onAuthStateChange((event, session) =>
 });
 // later: subscription.unsubscribe();
 
-// Persist the session across reloads by calling setSession on a fresh client:
+// Header compatibility mode only: restore a caller-managed bearer session.
 const fresh = new Somewhere({ key: 'smt_...', projectId: 'booking-app' });
 await fresh.auth.setSession({ access_token: savedJwt });
 
 // Update / reset password
 await sw.auth.updateUser({ display_name: 'Alice' });
 await sw.auth.resetPasswordForEmail('alice@example.com');
-await sw.auth.verifyOtp({ token: 'from-email', newPassword: '...' });
+await sw.auth.verifyPasswordReset({ token: 'from-email', newPassword: '...' });
 ```
+
+### Naming and result alignment
+
+| Intent | `@somewhere-tech/auth` | `@somewhere-tech/sdk` |
+|---|---|---|
+| Password sign-in | `signIn() → User` | `signInWithPassword()` or `signIn()` → `Result<AuthResponse>` |
+| Start passwordless | `sendMagicLink() → void` | `sendMagicLink()` → `Result<{sent:true}>` |
+| Complete passwordless | `verifyMagicLink() → User` | `verifyMagicLink()` → `Result<AuthResponse>` |
+| Complete password reset | — | `verifyPasswordReset()` |
+| Historical password-reset name | — | deprecated `verifyOtp()` alias, retained under rule 9 |
+
+The transport and handler routes align; result envelopes remain intentionally
+different for source compatibility. See
+[docs/auth-convergence.md](docs/auth-convergence.md) for the complete table and
+the changes that require a major version or founder sign-off.
 
 ## Realtime — `sw.channel(name)`
 
@@ -404,19 +450,17 @@ try {
 
 ## Auth modes explained
 
-The SDK supports two construction modes that match the two Somewhere auth flows:
+There is one architecture with transport selected by environment:
 
 ```typescript
-// Server-side (full access — never ship to the browser)
-const sw = new Somewhere({ key: 'smt_...' });
+// Browser: no credential; the session cookie is managed by the browser.
+const browser = createClient('https://booking-app.somewhere.tech');
 
-// Client-side (user JWT, scoped to one project)
-const sw = new Somewhere({ token: 'eyJ...', projectId: 'booking-app' });
+// Server/non-browser: explicit bearer or developer credential.
+const sw = new Somewhere({ key: 'smt_...' });
 ```
 
-When the server-side client successfully signs a user in, it automatically scopes its dual-auth calls (db, storage, auth.me) to the user's JWT while keeping developer-only calls (email, AI, auth.signUp) using the `smt_` key. This matches Supabase's behavior.
-
-For SPA patterns, the browser default is **cookie mode** (0.6.0):
+For browser apps, cookie mode is the default:
 
 1. Mount the standard auth handler in your app's functions (one file —
    `sw.auth.loginWithCookie` / `signupWithCookie` / `logoutWithCookie` /
@@ -428,10 +472,11 @@ For SPA patterns, the browser default is **cookie mode** (0.6.0):
    carries the session automatically. No tokens in JS, nothing in
    localStorage, and the server refreshes the session in-band.
 
-Advanced / native (no httpOnly cookie jar): pass `{ authMode: 'header' }`
-and own the tokens yourself — the 0.5.x manual flow is unchanged. A
-cookie-preferring client whose backend returns tokens (an older handler)
-falls back to header mode automatically, so neither half breaks the other.
+Non-browser clients without an httpOnly cookie jar pass
+`{ authMode: 'header' }` and own bearer refresh/rotation. Existing browser
+header sessions and older handlers keep working as a rule-9 compatibility
+bridge and migrate on a later cookie sign-in; this is not a new-browser
+recommendation.
 
 ## Test
 
