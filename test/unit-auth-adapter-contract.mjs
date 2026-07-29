@@ -7,6 +7,7 @@
  */
 import { createSomewhereAuth } from '@somewhere-tech/sdk/auth';
 import { somewhereAuth } from '@somewhere-tech/sdk/server';
+import { readFileSync } from 'node:fs';
 
 let passed = 0;
 let failed = 0;
@@ -46,6 +47,16 @@ check('react subpath exports every provider, hook, gate, callback, and billing c
   ]));
 check('server subpath exports the auth adapter handler',
   JSON.stringify(Object.keys(serverModule).sort()) === JSON.stringify(['somewhereAuth']));
+
+const authDeclarations = readFileSync(
+  new URL('../dist/types/auth/client.d.ts', import.meta.url),
+  'utf8',
+);
+const userDeclaration = authDeclarations.match(/export interface User \{([\s\S]*?)\n\}/)?.[1] ?? '';
+check('auth declarations export the complete AppUserRole union',
+  /export type AppUserRole = 'user' \| 'admin';/.test(authDeclarations));
+check('User.role stays optional for pre-RBAC consumers',
+  /^\s*role\?: AppUserRole;$/m.test(userDeclaration));
 
 const contract = [
   { client: 'fetch', kind: 'passthrough' },
