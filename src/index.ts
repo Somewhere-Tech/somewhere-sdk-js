@@ -20,6 +20,7 @@ import {
 } from './resources/realtime.js';
 import { StorageClient, StorageFileApi } from './resources/storage.js';
 import { TasksClient } from './resources/tasks.js';
+import { ProjectsClient } from './resources/projects.js';
 import { VideoClient } from './resources/video.js';
 import type { CreateClientOptions, SomewhereOptions } from './types.js';
 
@@ -50,6 +51,8 @@ export { InboxClient, InboxAddressesClient, InboxMessagesClient } from './resour
 export { CallsClient } from './resources/calls.js';
 export { TasksClient } from './resources/tasks.js';
 export type { Task, CreateTaskInput, UpdateTaskInput, TaskListOptions } from './resources/tasks.js';
+export { ProjectsClient } from './resources/projects.js';
+export type { ProjectAllowedOrigins } from './resources/projects.js';
 export type { SomewhereOptions };
 
 /**
@@ -95,6 +98,7 @@ export class Somewhere {
   readonly video: VideoClient;
   readonly calls: CallsClient;
   readonly tasks: TasksClient;
+  readonly projects: ProjectsClient;
 
   private readonly client: Client;
 
@@ -113,6 +117,7 @@ export class Somewhere {
     this.video = new VideoClient(this.client);
     this.calls = new CallsClient(this.client);
     this.tasks = new TasksClient(this.client);
+    this.projects = new ProjectsClient(this.client);
   }
 
   /** Supabase-style query builder entry point. Alias of `sw.db.from(table)`. */
