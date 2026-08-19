@@ -210,6 +210,41 @@ check('OAuth default callbacks stay under /api/auth',
     return call?.args[0]?.redirect_uri === 'https://app.example/api/auth/callback';
   }));
 
+// ── Runtime response-contract generations (platform tsk_72c4b4d2, A-F05) ──
+// The matrix above runs against OLD-generation doubles (cookie helpers return
+// the BARE user). Runtime 2026081605+ returns the wrapped { user } envelope.
+// somewhereAuth must emit the identical flat { user, cookie_session } body
+// for BOTH generations — a double-wrapped { user: { user } } is the failure
+// this section exists to catch.
+{
+  const wrappedSw = {
+    auth: {
+      signupWithCookie: async () => ({ user }),
+      loginWithCookie: async () => ({ user }),
+      logoutWithCookie: async () => ({ ok: true }),
+      fromRequest: async () => user,
+    },
+  };
+  const mk = (path, body) => new Request('https://app.example' + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Sw-Auth-Mode': 'cookie', Cookie: '__Host-token=t' },
+    body: JSON.stringify(body),
+  });
+  const loginRes = await somewhereAuth(mk('/api/auth/login', { email: user.email, password: 'pw' }), wrappedSw);
+  const loginBody = await loginRes.json();
+  check('new-generation login: flat user, not double-wrapped',
+    loginBody?.user?.id === user.id && loginBody?.user?.user === undefined && loginBody?.cookie_session === true);
+  const signupRes = await somewhereAuth(mk('/api/auth/signup', { email: user.email, password: 'pw' }), wrappedSw);
+  const signupBody = await signupRes.json();
+  check('new-generation signup: flat user, not double-wrapped',
+    signupBody?.user?.id === user.id && signupBody?.user?.user === undefined && signupBody?.cookie_session === true);
+  // Old generation stays covered by the matrix doubles above; assert its login
+  // response here too so both generations are pinned side by side.
+  const oldSw = { auth: { loginWithCookie: async () => user, fromRequest: async () => user } };
+  const oldBody = await (await somewhereAuth(mk('/api/auth/login', { email: user.email, password: 'pw' }), oldSw)).json();
+  check('old-generation login: flat user preserved', oldBody?.user?.id === user.id && oldBody?.cookie_session === true);
+}
+
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);
 process.stdout.write('[ OK  @somewhere-tech/sdk ] exhaustive client ↔ adapter contract matrix verified\n');

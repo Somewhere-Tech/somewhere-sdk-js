@@ -80,6 +80,19 @@ interface TokenBundle {
   data?: TokenBundle;
 }
 
+/**
+ * Runtime response-contract compatibility (platform tsk_72c4b4d2, A-F05).
+ * Runtime 2026081605+ cookie helpers return the documented { user } envelope;
+ * older baked bundles return the bare user object (or null). Accept both so
+ * one SDK version serves projects on either runtime generation.
+ */
+function unwrapAuthUser(result: unknown): unknown {
+  if (result && typeof result === 'object' && 'user' in (result as Record<string, unknown>)) {
+    return (result as { user?: unknown }).user ?? null;
+  }
+  return result ?? null;
+}
+
 export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<Response> {
   const url = new URL(req.url);
   // The path after the (last) `/auth` segment — robust to whatever prefix the
@@ -120,13 +133,13 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
     if (method === 'POST' && sub === '/signup') {
       const b = await readBody();
       if (wantsCookie && typeof sw.auth.signupWithCookie === 'function') {
-        const user = await sw.auth.signupWithCookie(
+        const result = await sw.auth.signupWithCookie(
           req,
           String(b.email ?? ''),
           String(b.password ?? ''),
           { display_name: (b.display_name ?? b.displayName) as string | undefined },
         );
-        return json({ user: user ?? null, cookie_session: true });
+        return json({ user: unwrapAuthUser(result), cookie_session: true });
       }
       const d = await sw.auth.signup({
         email: String(b.email ?? ''),
@@ -142,12 +155,12 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
     if (method === 'POST' && sub === '/login') {
       const b = await readBody();
       if (wantsCookie && typeof sw.auth.loginWithCookie === 'function') {
-        const user = await sw.auth.loginWithCookie(
+        const result = await sw.auth.loginWithCookie(
           req,
           String(b.email ?? ''),
           String(b.password ?? ''),
         );
-        return json({ user: user ?? null, cookie_session: true });
+        return json({ user: unwrapAuthUser(result), cookie_session: true });
       }
       const d = await sw.auth.login({ email: String(b.email ?? ''), password: String(b.password ?? '') });
       if (wantsCookie && canCookie) {
