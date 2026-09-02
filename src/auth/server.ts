@@ -13,13 +13,16 @@
  * platform (can't be called from the browser), which is exactly why this thin
  * server shim exists.
  *
- * SESSION TRANSPORT (0.2.0): when the client sends `X-Sw-Auth-Mode: cookie`
- * (the browser default) and the runtime exposes `sw.auth.setSessionCookies`,
- * sign-in responses set the session as httpOnly cookies and return only
- * `{ user, cookie_session: true }` — the tokens never enter page JS. Every
- * other caller (non-browser clients, older clients, explicit compatibility
- * mode, older runtimes) gets the 0.1.x token-bundle body unchanged. This is a
- * rule-9 migration bridge, not a second recommended browser architecture.
+ * SESSION TRANSPORT: every successful sign-in sets the session as httpOnly
+ * `__Host-` cookies whenever the runtime exposes `sw.auth.setSessionCookies`,
+ * so a plain `fetch('/api/auth/login', { credentials: 'include' })` — the
+ * published browser happy path — persists the session with no header to
+ * remember. `X-Sw-Auth-Mode` selects the RESPONSE BODY, not whether a session
+ * exists: `cookie` returns only `{ user, cookie_session: true }` (tokens never
+ * enter page JS), every other caller keeps the 0.1.x token-bundle body
+ * unchanged, and `token` opts out of the cookie entirely for a backend that
+ * mints its own. Before tsk_d05a6cfb the cookie was header-gated, so the
+ * documented browser flow signed up successfully and then had no session.
  *
  * Covered today: email/password (signup, login, logout), magic-link/OTP,
  * Google/GitHub/Discord OAuth (url + exchange), and `me` (validate + refresh).
@@ -101,24 +104,62 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
   const sub = (m && m[1]) || '/';
   const method = req.method.toUpperCase();
 
-  // Cookie sessions only when the CLIENT asked for them AND the runtime can
-  // mint them. Falling through to the token body is compatibility for
-  // non-browser/older clients and runtimes; new browser apps stay cookie-only.
-  const wantsCookie = (req.headers.get('X-Sw-Auth-Mode') || '').toLowerCase() === 'cookie';
-  const canCookie = typeof sw.auth.setSessionCookies === 'function';
+  // SESSION COOKIES ARE THE DEFAULT (platform tsk_d05a6cfb).
+  //
+  // Until now the httpOnly pair was set ONLY when the caller sent
+  // `X-Sw-Auth-Mode: cookie` — which the @somewhere-tech/sdk/auth client sends
+  // and a plain `fetch(..., { credentials: 'include' })` does not. So the
+  // published browser happy path (AGENT.md's lead example, docs({ topic:
+  // 'auth-client' }) §3) got a 200 with no `Set-Cookie` at all against the
+  // scaffold's `api/auth/[...path]` route: sign-up succeeded and the session
+  // never persisted. The header now selects the RESPONSE BODY, not whether a
+  // session exists.
+  //
+  // What each caller sees after this change:
+  //   `X-Sw-Auth-Mode: cookie`  — cookies + `{ user, cookie_session: true }`. Unchanged.
+  //   no header (raw fetch, non-browser client, pre-0.2.0 client)
+  //                             — cookies, AND the 0.1.x token bundle body,
+  //                               byte-identical to what it received before.
+  //                               Nothing that reads `access_token` breaks; a
+  //                               client with no cookie jar ignores the header.
+  //   `X-Sw-Auth-Mode: token`   — the rule-9 opt-out: no cookie is ever set.
+  //                               For a backend that mints its own session
+  //                               cookie from the returned tokens and does not
+  //                               want the platform pair alongside it.
+  // An app that sets its OWN cookie is untouched either way: this handler only
+  // ever adds the platform `__Host-` pair, and never reads or clears another
+  // name.
+  const modeHint = (req.headers.get('X-Sw-Auth-Mode') || '').toLowerCase();
+  const wantsCookie = modeHint === 'cookie';
+  const refusesCookie = modeHint === 'token' || modeHint === 'bearer' || modeHint === 'header';
+  // Optional on the namespace so an older baked runtime degrades to token
+  // bodies instead of throwing.
+  const canCookie = !refusesCookie && typeof sw.auth.setSessionCookies === 'function';
 
-  // Set the httpOnly pair from a platform token bundle and answer with the
-  // cookie-handshake shape (user only — tokens stay out of page JS). Returns
-  // null when the bundle has no pair (e.g. mfa_required) so the caller falls
-  // back to the token body.
-  const cookieSession = (bundle: unknown): Response | null => {
+  // Set the httpOnly pair from a platform token bundle. Returns the unwrapped
+  // bundle when the session was staged, or null when there is no pair to stage
+  // (e.g. mfa_required, or an opted-out/older runtime) so the caller answers
+  // with the token body.
+  const stageSessionCookies = (bundle: unknown): TokenBundle | null => {
+    if (!canCookie) return null;
     const b = (bundle ?? {}) as TokenBundle;
     const d = b.data ?? b;
     const access = d.token ?? d.access_token;
     const refresh = d.refresh_token;
     if (!access || !refresh) return null;
     sw.auth.setSessionCookies!(String(access), String(refresh));
-    return json({ user: d.user ?? null, cookie_session: true });
+    return d;
+  };
+
+  // Stage the cookies, then answer in the shape this caller asked for: the
+  // cookie handshake when it sent the hint, otherwise the token bundle it has
+  // always received (now accompanied by a session cookie it is free to ignore).
+  const sessionResponse = (bundle: unknown): Response => {
+    const staged = stageSessionCookies(bundle);
+    if (wantsCookie && staged) {
+      return json({ user: staged.user ?? null, cookie_session: true });
+    }
+    return json(bundle);
   };
 
   const readBody = async (): Promise<Record<string, unknown>> => {
@@ -146,11 +187,7 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
         password: String(b.password ?? ''),
         display_name: (b.display_name ?? b.displayName) as string | undefined,
       });
-      if (wantsCookie && canCookie) {
-        const r = cookieSession(d);
-        if (r) return r;
-      }
-      return json(d);
+      return sessionResponse(d);
     }
     if (method === 'POST' && sub === '/login') {
       const b = await readBody();
@@ -163,11 +200,7 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
         return json({ user: unwrapAuthUser(result), cookie_session: true });
       }
       const d = await sw.auth.login({ email: String(b.email ?? ''), password: String(b.password ?? '') });
-      if (wantsCookie && canCookie) {
-        const r = cookieSession(d);
-        if (r) return r;
-      }
-      return json(d);
+      return sessionResponse(d);
     }
     if (method === 'POST' && sub === '/logout') {
       // logoutWithCookie revokes the session from the refresh cookie AND
@@ -194,11 +227,7 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
     if (method === 'POST' && sub === '/magic-link/verify') {
       const b = await readBody();
       const d = await sw.auth.verifyOtp({ token: String(b.token ?? '') });
-      if (wantsCookie && canCookie) {
-        const r = cookieSession(d);
-        if (r) return r;
-      }
-      return json(d);
+      return sessionResponse(d);
     }
     // Entitlements (sw.billing): the project's plan catalog, for a pricing page.
     // The catalog is project-wide and non-secret. 404s on a runtime without
@@ -256,11 +285,7 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
     if (method === 'POST' && sub === '/google') {
       const b = await readBody();
       const d = await sw.auth.googleExchange({ code: String(b.code ?? '') });
-      if (wantsCookie && canCookie) {
-        const r = cookieSession(d);
-        if (r) return r;
-      }
-      return json(d);
+      return sessionResponse(d);
     }
     if (method === 'GET' && sub === '/github-url') {
       const redirectUri = url.searchParams.get('redirect_uri') || `${url.origin}/api/auth/callback`;
@@ -270,11 +295,7 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
     if (method === 'POST' && sub === '/github') {
       const b = await readBody();
       const d = await sw.auth.githubExchange({ code: String(b.code ?? '') });
-      if (wantsCookie && canCookie) {
-        const r = cookieSession(d);
-        if (r) return r;
-      }
-      return json(d);
+      return sessionResponse(d);
     }
     if (method === 'GET' && sub === '/discord-url') {
       const redirectUri = url.searchParams.get('redirect_uri') || `${url.origin}/api/auth/callback`;
@@ -284,11 +305,7 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
     if (method === 'POST' && sub === '/discord') {
       const b = await readBody();
       const d = await sw.auth.discordExchange({ code: String(b.code ?? '') });
-      if (wantsCookie && canCookie) {
-        const r = cookieSession(d);
-        if (r) return r;
-      }
-      return json(d);
+      return sessionResponse(d);
     }
     return json({ error: 'NOT_FOUND', message: `No @somewhere-tech/sdk/auth route for ${method} ${sub}` }, 404);
   } catch (err) {

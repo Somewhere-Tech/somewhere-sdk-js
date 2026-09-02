@@ -1,0 +1,43 @@
+# Publish @somewhere-tech/sdk to npm WITH PROVENANCE.
+#
+# Provenance (the signed attestation linking the published tarball to this exact
+# repo + commit + CI run) can ONLY be produced from CI with OIDC — a local
+# `npm publish` produces none. Every release up to and including 0.7.3 was
+# published by hand and carries no attestation; 0.7.3 was additionally cut from
+# an unmerged side branch, so npm's gitHead pointed at a commit that was not on
+# master. This workflow is how that stops.
+#
+# Setup (one time, founder):
+#   1. Repo → Settings → Secrets → Actions → add NPM_TOKEN (an npm automation
+#      token for the @somewhere-tech org, publish scope). The CLI repo already
+#      has one; this repo has NO secrets set.
+#   2. The repo must be public for the provenance attestation to be public.
+#      Somewhere-Tech/somewhere-sdk-js is public. ✓
+# Release:
+#   bump version in package.json, merge to master, then:
+#   git tag v0.7.4 && git push origin v0.7.4   (or run this workflow manually)
+name: Publish to npm
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC token — REQUIRED for npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm ci
+      - run: npm test
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

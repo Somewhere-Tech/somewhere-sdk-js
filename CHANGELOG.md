@@ -6,6 +6,32 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## 0.7.4 — Sign-in sets the session cookie by default
+
+### Fixed
+- **Sign-in now sets the session cookie by default.** A successful sign-up or
+  sign-in through `somewhereAuth` stages the httpOnly session cookies whenever
+  the runtime supports them, so the documented browser flow —
+  `fetch('/api/auth/login', { credentials: 'include' })`, then
+  `fetch('/api/auth/me', { credentials: 'include' })` — signs the user in and
+  keeps them signed in, with no token handled in browser code. Previously the
+  cookie was set only when the request carried the `X-Sw-Auth-Mode: cookie`
+  header, which this SDK's own auth client sends but a plain `fetch` does not:
+  sign-up returned 200 with no cookie at all, `/api/auth/me` then answered
+  `{ "user": null }`, and every protected route stayed unauthorized.
+
+### Notes for upgraders
+- **Nothing you already have changes.** `X-Sw-Auth-Mode` now selects the
+  response *body* only. Apps using this SDK's auth client are byte-identical.
+  Any other caller — a raw `fetch`, a mobile or server client, a pre-0.2.0
+  client — receives the exact response body it received before, now alongside
+  a session cookie it is free to ignore.
+- **Send `X-Sw-Auth-Mode: token` to opt out** if your backend mints its own
+  session cookie from the returned tokens and does not want the platform pair
+  set alongside it. Your own cookies are never touched either way: this handler
+  only ever adds the platform session pair, and never reads or clears a cookie
+  under any other name.
+
 ## 0.5.0 — Default-on query cache ("platform intelligence")
 
 **Breaking (default behaviour change): `from().select()` is now cached by
