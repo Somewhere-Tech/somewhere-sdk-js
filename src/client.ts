@@ -73,7 +73,7 @@ export class Client {
   /**
    * Instance-scoped query cache for `from().select()`, or `null` when the
    * caller passed `{ cache: false }`. Consulted by the PostgrestFilterBuilder
-   * executor. Instance-scoped ⇒ auth-scoped (one client = one identity).
+   * executor. Explicit session transitions clear cached and pending reads.
    */
   readonly cache: QueryCache | null;
 
@@ -144,10 +144,13 @@ export class Client {
   }
 
   setSessionToken(accessToken: string): void {
-    this.sessionAuthHeader = `Bearer ${accessToken}`;
+    const header = `Bearer ${accessToken}`;
+    if (header !== this.sessionAuthHeader) this.cache?.clear();
+    this.sessionAuthHeader = header;
   }
 
   clearSession(): void {
+    this.cache?.clear();
     this.sessionAuthHeader = null;
   }
 

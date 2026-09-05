@@ -344,19 +344,15 @@ export class PostgrestFilterBuilder
       return result;
     }
 
-    // Select with caching off (globally or via `.fresh()`): always hit the
-    // network. `.fresh()` still warms the cache for the next normal read.
-    if (!cache || this.freshOnly) {
-      const result = await this.doFetch(projectId);
-      if (cache && result.error === null) {
-        cache.store(this.cacheKey(projectId), this.table, result);
-      }
-      return result;
-    }
+    if (!cache) return this.doFetch(projectId);
 
-    // Normal cached read: dedup + staleTime read-through.
-    return cache.read(this.cacheKey(projectId), this.table, () =>
-      this.doFetch(projectId),
+    // Forced reads always fetch, but use the same generation fence as cached
+    // reads so an overlapping write/session change cannot warm stale data.
+    return cache.read(
+      this.cacheKey(projectId),
+      this.table,
+      () => this.doFetch(projectId),
+      this.freshOnly,
     );
   }
 
@@ -394,8 +390,8 @@ export class PostgrestFilterBuilder
 
   /**
    * Cache key for this select: every input that changes the result set —
-   * project + table + columns + filters + order + limit/offset + resolveType.
-   * Two builders that would produce identical SQL produce identical keys.
+   * project + table + columns + filters + order + limit/offset + resolveType
+   * + count/head options, including inputs that change only the result shape.
    */
   private cacheKey(projectId: string | undefined): string {
     return JSON.stringify({
@@ -407,6 +403,8 @@ export class PostgrestFilterBuilder
       l: this.limitN,
       x: this.offsetN,
       r: this.resolveType,
+      count: this.countMode,
+      head: this.headOnly,
     });
   }
 
