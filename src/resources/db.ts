@@ -32,8 +32,10 @@ export class DbClient {
    * to positional binds. Returns the rows array on success and throws a
    * `SomewhereError` on failure (use `try/catch`, not `{data, error}`).
    *
-   * Accepts both `smt_` developer keys and app-user JWTs. App-user
-   * sessions are subject to per-table user-scope enforcement.
+   * Requires a server-side `smt_` developer key. App-user/browser callers
+   * should invoke a server function and use its runtime `sw.db` binding.
+   * The SDK deliberately returns only canonical result `data`; runtime and
+   * REST result metadata (`count`, `changes`, `last_row_id`) is not returned.
    */
   async query<Row = Record<string, unknown>>(
     sql: string,
@@ -44,12 +46,22 @@ export class DbClient {
     const body: Record<string, unknown> = { project_id: projectId, sql };
     if (params.length > 0) body.params = params;
     if (typeof options.timeoutMs === 'number') body.timeout_ms = options.timeoutMs;
-    const result = await this.client.call<{ rows?: Row[]; results?: Row[]; data?: Row[] }>(
+    const result = await this.client.call<unknown>(
       'POST',
       '/db/query',
       { body },
     );
-    return result?.rows ?? result?.results ?? result?.data ?? [];
+    if (result === null || typeof result !== 'object'
+        || !('data' in result) || !Array.isArray(result.data)) {
+      throw new SomewhereError({
+        code: 'INVALID_RESPONSE',
+        message: 'Database query response must contain a canonical data array.',
+        statusCode: 200,
+        retry: false,
+        retryAfterMs: null,
+      });
+    }
+    return result.data as Row[];
   }
 
   /**

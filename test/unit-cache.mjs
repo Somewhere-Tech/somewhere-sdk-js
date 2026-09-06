@@ -3,14 +3,16 @@
 // request dedup, ~1s staleTime cache, invalidate-on-write, the `.fresh()`
 // + `cache:false` opt-outs, prefetch warming, cache-key isolation, and the
 // no-shared-mutation guarantee. Executes current TypeScript source in memory;
-// no build output, credentials, or network required. Requires Node registerHooks.
+// no credentials or network required. Source mode requires Node registerHooks.
+// Pass --built to verify the emitted package with the same behavioral cases.
 //
 //   node test/unit-cache.mjs
 
-import './source-loader.mjs';
 import assert from 'node:assert/strict';
-const { createClient, QueryCache, SomewhereQueryBuilder, SomewhereError } = await import('../src/index.ts');
-const { Client } = await import('../src/client.ts');
+const built = process.argv.includes('--built');
+if (!built) await import('./source-loader.mjs');
+const { createClient, QueryCache, SomewhereQueryBuilder, SomewhereError } = await import(built ? '../dist/esm/index.js' : '../src/index.ts');
+const { Client } = await import(built ? '../dist/esm/client.js' : '../src/client.ts');
 
 const URL_ = 'https://demo.somewhere.tech';
 const TOKEN = 'eyJ.jwt.token';
