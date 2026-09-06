@@ -7,8 +7,7 @@ import type { Result } from './types.js';
  * `docs/platform-intelligence.md`):
  *
  *  1. **Request dedup / single-flight.** Two awaits of the same query while
- *     the first is still in flight share ONE network request. Zero staleness
- *     risk — they'd have resolved to the same bytes anyway.
+ *     the first is still in flight share ONE network request within a generation.
  *  2. **Short staleTime cache (~1s).** A repeat read within `staleTime` of the
  *     last fetch returns the prior result instead of refetching. 1s is the
  *     safety knob: own-writes invalidate (below), normal polling (>1s apart)
@@ -16,9 +15,8 @@ import type { Result } from './types.js';
  *  3. **Invalidate-on-write.** A write to a table drops that table's cached
  *     reads so the next read is fresh (read-your-own-writes correctness).
  *
- * The cache is owned by a single `Client` instance, so it is **auth-scoped for
- * free**: one client = one identity = one cache. Cache keys never cross
- * clients, and signing out (a new client) starts from empty.
+ * The cache is owned by a single `Client` instance. Session transitions
+ * clear its entries and detach pending reads from the next session.
  *
  * REALTIME-INVALIDATION SEAM (future, not built here): a realtime event for a
  * table should call {@link QueryCache.invalidate} for that table — the exact
@@ -35,6 +33,11 @@ interface CacheEntry {
   table: string;
 }
 
+interface InFlightRead {
+  promise: Promise<Result<unknown>>;
+  table: string;
+}
+
 const DEFAULT_STALE_TIME_MS = 1000;
 
 /** Hand back an isolated copy so a caller mutating `.data` can't poison the cache. */
@@ -45,7 +48,7 @@ function cloneResult(r: Result<unknown>): Result<unknown> {
 export class QueryCache {
   private readonly staleTime: number;
   private readonly entries = new Map<string, CacheEntry>();
-  private readonly inFlight = new Map<string, Promise<Result<unknown>>>();
+  private readonly inFlight = new Map<string, InFlightRead>();
   /**
    * Per-table generation counter. Bumped on every invalidate so a fetch that
    * was already in flight when its table got invalidated does NOT repopulate
@@ -61,49 +64,52 @@ export class QueryCache {
 
   /**
    * Read-through with dedup + staleTime. `run` performs the actual network
-   * fetch and is invoked at most once per in-flight key.
+   * fetch and is invoked at most once per in-flight key and generation.
+   * `fresh` bypasses hits and dedup but still fences cache warming on invalidation.
    */
   async read(
     key: string,
     table: string,
     run: () => Promise<Result<unknown>>,
+    fresh = false,
   ): Promise<Result<unknown>> {
     const hit = this.entries.get(key);
-    if (hit && this.now() - hit.storedAt < this.staleTime) {
+    if (!fresh && hit && this.now() - hit.storedAt < this.staleTime) {
       return cloneResult(hit.value);
     }
 
     const flight = this.inFlight.get(key);
-    if (flight) {
+    if (!fresh && flight) {
       // Dedup: join the in-flight request instead of starting a second one.
-      return cloneResult(await flight);
+      return cloneResult(await flight.promise);
     }
 
     const gen = this.generations.get(table) ?? 0;
+    this.generations.set(table, gen);
     const p = (async () => {
       const result = await run();
       // Only cache successes, and only if no invalidate landed mid-flight.
       if (result.error === null && (this.generations.get(table) ?? 0) === gen) {
-        this.entries.set(key, { value: result, storedAt: this.now(), table });
+        this.entries.set(key, { value: cloneResult(result), storedAt: this.now(), table });
       }
       return result;
     })();
 
-    this.inFlight.set(key, p);
+    if (!fresh) this.inFlight.set(key, { promise: p, table });
     try {
       return cloneResult(await p);
     } finally {
-      this.inFlight.delete(key);
+      if (this.inFlight.get(key)?.promise === p) this.inFlight.delete(key);
     }
   }
 
   /**
-   * Store a freshly-fetched result directly. Used by `.fresh()` (a forced
-   * network read still warms the cache for the next normal read).
+   * Store a current result directly. Reads that can overlap invalidation
+   * should use `read` so their cache warming is generation-checked.
    */
   store(key: string, table: string, result: Result<unknown>): void {
     if (result.error === null) {
-      this.entries.set(key, { value: result, storedAt: this.now(), table });
+      this.entries.set(key, { value: cloneResult(result), storedAt: this.now(), table });
     }
   }
 
@@ -116,11 +122,15 @@ export class QueryCache {
     for (const [key, entry] of this.entries) {
       if (entry.table === table) this.entries.delete(key);
     }
+    for (const [key, flight] of this.inFlight) {
+      if (flight.table === table) this.inFlight.delete(key);
+    }
   }
 
-  /** Drop the entire cache. */
+  /** Drop the entire cache and detach pending reads. */
   clear(): void {
     this.entries.clear();
+    this.inFlight.clear();
     for (const table of this.generations.keys()) {
       this.generations.set(table, (this.generations.get(table) ?? 0) + 1);
     }
