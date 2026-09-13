@@ -10,14 +10,14 @@ import type {
 } from '../types.js';
 
 /**
- * Supabase Auth-style client.
+ * Application auth client.
  *
  *     const { data, error } = await sw.auth.signUp({ email, password })
  *     const { data, error } = await sw.auth.signInWithPassword({ email, password })
  *     const { data, error } = await sw.auth.signOut()
  *     const { data: { user } } = await sw.auth.getUser()
  *
- * Method names match `@supabase/supabase-js` for the supported subset.
+ * Method names are retained for existing SDK callers.
  *
  * ONLY-PATH CONTRACT (tsk_acd56ee8):
  *
@@ -99,11 +99,11 @@ export class AuthClient {
     }
   }
 
-  /* ─── Auth state changes (Supabase-compatible) ─────────────── */
+  /* ─── Auth state changes ───────────────────────────── */
 
   /**
    * Subscribe to sign-in / sign-out / token-refresh / user-update events.
-   * Matches `@supabase/supabase-js` — the callback fires immediately with
+   * The callback fires immediately with
    * `('INITIAL_SESSION', currentSession)` (asynchronously), then on every
    * later transition.
    *
@@ -115,7 +115,7 @@ export class AuthClient {
     callback: (event: AuthChangeEvent, session: Session | null) => void,
   ): AuthSubscription {
     this.authListeners.add(callback);
-    // Supabase fires INITIAL_SESSION asynchronously after subscribe.
+    // The client fires INITIAL_SESSION asynchronously after subscribe.
     const fire = () => {
       try {
         callback('INITIAL_SESSION', this.currentSession ?? this.cookieSession());
@@ -218,9 +218,8 @@ export class AuthClient {
   }
 
   /**
-   * Returns a Google OAuth redirect URL. Matches Supabase's
-   * `signInWithOAuth`, but note the platform currently only supports
-   * Google. The caller redirects the browser to `data.url`.
+   * Returns a Google OAuth redirect URL from `signInWithOAuth`. The platform
+   * currently supports Google. The caller redirects the browser to `data.url`.
    */
   async signInWithOAuth(options: {
     provider: 'google';

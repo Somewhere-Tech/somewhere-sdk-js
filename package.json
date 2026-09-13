@@ -1,6 +1,6 @@
 {
   "name": "@somewhere-tech/sdk",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "description": "Official JavaScript/TypeScript SDK for the somewhere.tech platform API.",
   "keywords": [
     "somewhere",
@@ -11,7 +11,7 @@
     "auth",
     "storage",
     "ai",
-    "supabase"
+    "functions"
   ],
   "homepage": "https://somewhere.tech",
   "repository": {

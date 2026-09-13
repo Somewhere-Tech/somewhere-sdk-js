@@ -38,7 +38,7 @@ function isBinaryBody(body: unknown): boolean {
  * every resource. Handles auth mode resolution, envelope unwrapping,
  * typed error materialization, binary round-trips, and the `safeCall`
  * helper that converts `call` into a `Result<T>` envelope for the
- * Supabase/Resend-style surfaces.
+ * result-envelope surfaces.
  */
 export class Client {
   readonly baseUrl: string;
@@ -283,7 +283,7 @@ export class Client {
 
   /**
    * Same as `call` but never throws — always returns a `Result<T>`.
-   * Used by Supabase / Resend-style surfaces where the caller branches
+   * Used by result-envelope surfaces where the caller branches
    * on `.error` instead of catching.
    */
   async safeCall<T>(

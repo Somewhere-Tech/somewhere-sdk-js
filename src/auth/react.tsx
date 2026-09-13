@@ -164,7 +164,7 @@ function formatPlanPrice(p: BillingPlan): string {
 }
 
 /**
- * Drop-in pricing page (sw.billing). Renders the project's code-defined plans,
+ * Pricing page (sw.billing). Renders the project's code-defined plans,
  * highlights the user's current plan, and a Subscribe button runs checkout for
  * the signed-in user (the worker resolves the plan's price from the catalog).
  *

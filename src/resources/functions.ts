@@ -3,7 +3,7 @@ import { SomewhereError } from '../errors.js';
 import type { FunctionInvokeOptions, Result } from '../types.js';
 
 /**
- * Supabase Edge Functions-style client.
+ * Application-function invocation client.
  *
  *     const { data, error } = await sw.functions.invoke('checkout', {
  *       body: { plan: 'pro' },
@@ -12,7 +12,7 @@ import type { FunctionInvokeOptions, Result } from '../types.js';
  * `invoke(name)` calls `POST {projectUrl}/api/{name}` — the project's own
  * deployed function (an `api/{name}` file). `data` is the function's parsed
  * JSON response (or text); `error` is set on any non-2xx status or network
- * failure, matching Supabase's `{ data, error }` envelope.
+ * failure, using the established `{ data, error }` envelope.
  *
  * The function host is the URL you passed to `createClient(url, key)`. When
  * the client was built with `new Somewhere({ key, projectId })` instead, the

@@ -56,16 +56,15 @@ export type { ProjectAllowedOrigins } from './resources/projects.js';
 export type { SomewhereOptions };
 
 /**
- * The somewhere.tech client. Namespaces match the dominant player in
- * each category, so migrating from the existing best-of-breed services
- * is one import and one constructor:
+ * The somewhere.tech client for explicit server and non-browser access, plus
+ * browser auth and application-function conveniences:
  *
  *   - `sw.db.query(sql, params)`     — raw SQL
- *   - `sw.db.from(table)` / `sw.from(table)` — Supabase-style query builder
+ *   - `sw.db.from(table)` / `sw.from(table)` — fluent query builder
  *   - `sw.fs.read(path)` / `sw.fs.write(path, body)` — raw filesystem
- *   - `sw.storage.from(bucket)`      — Supabase Storage bucket API
- *   - `sw.auth`                      — Supabase Auth
- *   - `sw.realtime.channel(name)`    — Supabase realtime channels
+ *   - `sw.storage.from(bucket)`      — prefix-oriented file API
+ *   - `sw.auth`                      — application auth
+ *   - `sw.realtime.channel(name)`    — broadcast channels
  *   - `sw.emails.send(...)`          — Resend email
  *   - `sw.inbox.messages.list(...)`  — inbound email
  *   - `sw.chat.completions.create()` — OpenAI chat completions
@@ -74,13 +73,8 @@ export type { SomewhereOptions };
  *   - `sw.calls.createSession()`     — WebRTC SFU sessions
  *   - `sw.tasks.create(...)`         — per-project ticketing
  *
- *     // Before
- *     import { createClient } from '@supabase/supabase-js'
- *     const supabase = createClient(url, anonKey)
- *
- *     // After
  *     import { Somewhere } from '@somewhere-tech/sdk'
- *     const sw = new Somewhere({ key: 'smt_...', projectId: 'booking-app' })
+ *     const sw = new Somewhere({ key: process.env.SOMEWHERE_API_KEY, projectId: 'booking-app' })
  *
  *     const { data } = await sw.from('users').select('*').eq('id', 1)
  */
@@ -120,7 +114,7 @@ export class Somewhere {
     this.projects = new ProjectsClient(this.client);
   }
 
-  /** Supabase-style query builder entry point. Alias of `sw.db.from(table)`. */
+  /** Fluent query builder entry point. Alias of `sw.db.from(table)`. */
   from(table: string): SomewhereQueryBuilder {
     return new SomewhereQueryBuilder(this.client, table);
   }
@@ -152,7 +146,7 @@ export class Somewhere {
   }
 
   /**
-   * Supabase-style realtime channel entry point. Alias of
+   * Realtime channel entry point. Alias of
    * `sw.realtime.channel(name)`:
    *
    *     sw.channel('room')
@@ -164,11 +158,11 @@ export class Somewhere {
   }
 
   /**
-   * Supabase-style `rpc(name, args)`. On somewhere there are no SQL stored
+   * `rpc(name, args)` convenience method. On somewhere there are no SQL stored
    * procedures — a "database function" is one of your deployed `api/<name>`
    * functions. `rpc('foo', args)` therefore calls `POST {projectUrl}/api/foo`
    * with `args` as the JSON body and returns `{ data, error }`. Identical to
-   * `functions.invoke(name, { body: args })`; provided so Supabase `rpc(...)`
+   * `functions.invoke(name, { body: args })`; provided so existing `rpc(...)`
    * call sites port unchanged.
    */
   rpc<T = unknown>(name: string, args?: Record<string, unknown>) {
@@ -178,7 +172,7 @@ export class Somewhere {
 
 export default Somewhere;
 
-/* ─── createClient — Supabase-compatible factory ─────────────────────── */
+/* ─── createClient factory ───────────────────────────────────── */
 
 /**
  * Derive the project id from a `*.somewhere.tech` URL's subdomain. Returns
@@ -202,22 +196,19 @@ export function projectIdFromUrl(url: string): string | undefined {
 }
 
 /**
- * Supabase-compatible client factory. Mirrors `@supabase/supabase-js`:
+ * Create a somewhere.tech client from an application URL:
  *
  *     import { createClient } from '@somewhere-tech/sdk'
- *     const supabase = createClient(SOMEWHERE_URL, SOMEWHERE_KEY)
+ *     const client = createClient(SOMEWHERE_URL)
  *
- *     const { data, error } = await supabase.from('todos').select('*').eq('user_id', id)
- *     await supabase.auth.signInWithPassword({ email, password })
- *     supabase.storage.from('avatars').getPublicUrl('me.png')
- *     supabase.channel('room').on('broadcast', { event: 'msg' }, fn).subscribe()
- *     await supabase.functions.invoke('checkout', { body: { plan: 'pro' } })
+ *     await client.auth.signInWithPassword({ email, password })
+ *     await client.functions.invoke('checkout', { body: { plan: 'pro' } })
  *
  * - `somewhereUrl` — your project's URL (`https://<project>.somewhere.tech`).
  *   Used as the `functions.invoke` host and to infer the project id. For a
  *   custom domain, pass `{ projectId }` in the options.
  * - `somewhereKey` — omit in a browser cookie app. For non-browser/
- *   compatibility use, pass an app-user JWT or a developer `smt_` key
+ *   use, pass an app-user JWT or a developer `smt_` key
  *   (server-only). Detected by the `smt_` prefix.
  *
  * Database / auth / storage calls go to the platform REST base

@@ -4,7 +4,7 @@ import type { Result } from '../types.js';
 import { SomewhereQueryBuilder } from './postgrest.js';
 
 /**
- * Stripe-style database namespace. Raw SQL plus the Supabase-style
+ * Database namespace with raw SQL plus the fluent
  * query builder under one roof.
  *
  *     // Raw SQL — parameterized with $1, $2…
@@ -21,7 +21,7 @@ import { SomewhereQueryBuilder } from './postgrest.js';
  *       )
  *     `);
  *
- *     // Supabase-style query builder (alias of sw.from)
+ *     // Fluent query builder (alias of sw.from)
  *     const { data } = await sw.db.from('posts').select('*').eq('id', 1);
  */
 export class DbClient {
@@ -80,7 +80,7 @@ export class DbClient {
   }
 
   /**
-   * Supabase-style query builder. Identical to `sw.from(table)` — exposed
+   * Fluent query builder. Identical to `sw.from(table)` — exposed
    * here so devs who think in `sw.db.*` namespacing find it naturally.
    */
   from(table: string): SomewhereQueryBuilder {

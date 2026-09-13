@@ -3,9 +3,9 @@ import { SomewhereError } from '../errors.js';
 import type { Result } from '../types.js';
 
 /**
- * Supabase-style query builder.
+ * Fluent query builder.
  *
- * Usage matches `@supabase/supabase-js` for the common subset:
+ * The established fluent surface supports selects, filters, and writes:
  *
  *     const { data, error } = await sw.from('users').select('*').eq('id', 1)
  *     const { data, error } = await sw.from('users').insert({ name: 'A' })
@@ -34,7 +34,7 @@ type ResolveType = 'many' | 'single' | 'maybeSingle';
 
 type Action = 'select' | 'insert' | 'update' | 'upsert' | 'delete';
 
-/** Count mode for `select(cols, { count })`. Matches `@supabase/supabase-js`. */
+/** Count mode for `select(cols, { count })`. */
 export type CountMode = 'exact' | 'planned' | 'estimated';
 
 function invalidResult<T>(err: SomewhereError): Result<T> {
@@ -139,8 +139,7 @@ interface FilterBuilderState {
 
 /**
  * Fluent filter / modifier / resolver chain. Implements `then` so `await`
- * on a builder executes the query. Matches the shape of Supabase's
- * `PostgrestFilterBuilder` for the common subset.
+ * on a builder executes the query.
  */
 export class PostgrestFilterBuilder
   implements PromiseLike<Result<unknown>>
@@ -236,7 +235,7 @@ export class PostgrestFilterBuilder
   }
 
   /**
-   * OR a set of conditions (Supabase syntax). `.or('status.eq.active,age.gt.18')`
+   * OR a set of conditions (filter syntax). `.or('status.eq.active,age.gt.18')`
    * → `(status = 'active' OR age > 18)`, AND-ed with any other filters.
    * Each term is `column.operator.value`; `in` uses `col.in.(a,b,c)`. Numeric /
    * `true` / `false` / `null` values are coerced to their JSON types.
@@ -318,7 +317,7 @@ export class PostgrestFilterBuilder
 
   /**
    * Thenable so `await builder` executes the query. This is the same
-   * pattern Supabase uses — the chain doesn't hit the network until
+   * thenable pattern — the chain doesn't hit the network until
    * you `await` (or `.then()`) it.
    */
   then<TFulfilled = Result<unknown>, TRejected = never>(
@@ -371,7 +370,7 @@ export class PostgrestFilterBuilder
 
       const serverCount = typeof result?.count === 'number' ? result.count : null;
 
-      // head:true → the count only, no rows (Supabase HEAD semantics).
+      // head:true → the count only, no rows (count-only semantics).
       if (this.headOnly) {
         return { data: null, error: null, count: serverCount, status: 200 };
       }

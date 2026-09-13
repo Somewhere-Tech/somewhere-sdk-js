@@ -14,10 +14,10 @@ import {
 } from './realtime-reconnect.js';
 
 /**
- * Supabase-style realtime channels. Each (project, channel) is its own
+ * Realtime broadcast channels. Each (project, channel) is its own
  * isolated stream — projects can't see each other's traffic.
  *
- * Browser subscribe (Supabase-compatible):
+ * Browser subscription:
  *
  *     const channel = sw.channel('room')
  *       .on('broadcast', { event: 'message' }, ({ payload }) => render(payload))
@@ -78,7 +78,7 @@ export class RealtimeChannelClient {
     return this.channelName;
   }
 
-  /* ─── Subscribe surface (Supabase-compatible) ───────────────────── */
+  /* ─── Subscribe surface ─────────────────────────────────── */
 
   /**
    * Register a listener. Only `'broadcast'` is wired today; `'presence'`
@@ -208,8 +208,7 @@ export class RealtimeChannelClient {
   /**
    * Send a broadcast. Routes through the canonical publish endpoint so every
    * subscriber receives a typed `event` frame (matching `.on('broadcast',
-   * { event })`). Returns `'ok'` or `'error'` (Supabase returns a status
-   * string from `send`).
+   * { event })`). Returns the status string `'ok'` or `'error'`.
    */
   async send(message: {
     type: 'broadcast';

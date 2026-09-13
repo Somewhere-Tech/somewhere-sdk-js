@@ -4,7 +4,7 @@ import type { Result, StorageDownloadResult } from '../types.js';
 
 /**
  * Raw filesystem namespace. Path-based read / write / list / delete
- * without the Supabase "buckets" abstraction. Use this when you're
+ * without the bucket abstraction. Use this when you're
  * thinking in absolute paths inside your project (`/assets/logo.png`,
  * `/data/users.json`).
  *
@@ -13,7 +13,7 @@ import type { Result, StorageDownloadResult } from '../types.js';
  *     const entries = await sw.fs.list('/');
  *     await sw.fs.delete('avatar.png');
  *
- * For the Supabase-style bucket API see `sw.storage.from(bucket)`.
+ * For the prefix-oriented API see `sw.storage.from(bucket)`.
  */
 export class FsClient {
   constructor(private readonly client: Client) {}

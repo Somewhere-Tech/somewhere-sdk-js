@@ -56,9 +56,7 @@ export interface SomewhereOptions {
 }
 
 /**
- * Options for the Supabase-compatible `createClient(url, key, options?)`
- * factory. Mirrors the ergonomics of `@supabase/supabase-js`'s third arg
- * for the parts that map onto this platform.
+ * Options for the `createClient(url, key, options?)` factory.
  */
 export interface CreateClientOptions {
   /**
@@ -87,19 +85,18 @@ export interface CreateClientOptions {
   cache?: CacheConfig;
 }
 
-/** Options for `functions.invoke(name, options)`. Matches Supabase's shape. */
+/** Options for `functions.invoke(name, options)`. */
 export interface FunctionInvokeOptions {
   /** Request body. Objects/arrays are JSON-encoded; strings/binary pass through. */
   body?: unknown;
   /** Extra request headers. */
   headers?: Record<string, string>;
-  /** HTTP method. Defaults to `POST` (matching Supabase). */
+  /** HTTP method. Defaults to `POST`. */
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 }
 
 /**
- * Auth state-change events, named to match `@supabase/supabase-js` so
- * existing `onAuthStateChange` handlers port unchanged.
+ * Auth state-change events, used by `onAuthStateChange` callbacks.
  */
 export type AuthChangeEvent =
   | 'INITIAL_SESSION'
@@ -121,8 +118,8 @@ export interface RealtimeBroadcastPayload {
 }
 
 /**
- * Every mutating call (db, storage, auth, emails) returns this shape —
- * matching Supabase / Resend exactly. `error` is null on success, and
+ * Every mutating call (db, storage, auth, emails) returns this shape.
+ * `error` is null on success, and
  * `data` is null on error. Callers never throw-catch — they branch on
  * the error field.
  *
@@ -331,7 +328,7 @@ export interface PaymentsDashboardLinkResponse {
   url: string;
 }
 
-/* ─── Realtime (Supabase channels shape) ─────────────────────────── */
+/* ─── Realtime (broadcast channels shape) ─────────────────────────── */
 
 export interface RealtimeBroadcastResponse {
   delivered: number;

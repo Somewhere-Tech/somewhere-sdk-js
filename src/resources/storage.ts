@@ -10,7 +10,7 @@ import type {
 } from '../types.js';
 
 /**
- * Supabase Storage-style bucket API.
+ * Prefix-oriented file API.
  *
  * Routes through `/v1/fs/*` (the platform's structured filesystem).
  * "Buckets" are prefix directories under the project's file namespace:
@@ -165,9 +165,8 @@ export class StorageFileApi {
   }
 
   /**
-   * Supabase-exact alias of `signedUrl`. `createSignedUrl(path, expiresIn)`
-   * resolves to `{ data: { signedUrl, ...meta }, error }` — Supabase apps
-   * read `data.signedUrl`.
+   * Alias of `signedUrl`. `createSignedUrl(path, expiresIn)` resolves to
+   * `{ data: { signedUrl, ...meta }, error }`.
    */
   async createSignedUrl(
     path: string,
