@@ -17,7 +17,7 @@ import {
  * Developer-authorized realtime broadcast channels for server and non-browser
  * clients. Each (project, channel) is its own isolated stream. App-user and
  * visitor requests are refused with `CHANNEL_FORBIDDEN`; browser interfaces
- * use schema-declared named live views instead.
+ * use declared named live views instead.
  *
  * Developer-authorized subscription:
  *

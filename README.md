@@ -179,7 +179,7 @@ not grant access: app-user and visitor channel requests are refused with
 `403 CHANNEL_FORBIDDEN`.
 
 For live browser interfaces, declare a named `sw.db.live` view and use the
-generated browser subscription. See `docs({ topic: 'live-data' })` for that
+browser subscription helper. See `docs({ topic: 'realtime' })` for that
 contract and its scope limits: member and policy scopes are not subscribable,
 and relation-filtered live views are refused.
 
