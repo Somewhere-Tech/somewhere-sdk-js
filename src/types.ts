@@ -21,7 +21,7 @@ export interface SomewhereOptions {
   /** Override the REST base URL. Defaults to `https://api.somewhere.tech/v1`. */
   baseUrl?: string;
   /**
-   * The project's own URL (e.g. `https://my-app.somewhere.tech`), used as the
+   * The project's own URL (e.g. `https://my-app.somewhere.site`), used as the
    * host for `functions.invoke(name)` → `{functionsUrl}/api/{name}`. Set
    * automatically when you build the client with `createClient(url, key)`.
    * When omitted, `functions.invoke` derives `https://{projectId}.somewhere.tech`

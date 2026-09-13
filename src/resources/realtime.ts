@@ -14,10 +14,12 @@ import {
 } from './realtime-reconnect.js';
 
 /**
- * Realtime broadcast channels. Each (project, channel) is its own
- * isolated stream — projects can't see each other's traffic.
+ * Developer-authorized realtime broadcast channels for server and non-browser
+ * clients. Each (project, channel) is its own isolated stream. App-user and
+ * visitor requests are refused with `CHANNEL_FORBIDDEN`; browser interfaces
+ * use schema-declared named live views instead.
  *
- * Browser subscription:
+ * Developer-authorized subscription:
  *
  *     const channel = sw.channel('room')
  *       .on('broadcast', { event: 'message' }, ({ payload }) => render(payload))
@@ -33,10 +35,10 @@ import {
  *     await ch.send({ type: 'broadcast', event: 'order.placed', payload: { id: 42 } })
  *     const { data } = await ch.meta()          // { subscribers, last_message_at }
  *
- * `.on()`/`.subscribe()` need a `WebSocket` global (every browser; Node ≥22,
- * or inject one). Where it's absent, `.subscribe()` warns loudly and the
- * channel simply won't *receive* — `.send()` (which goes over REST) still
- * delivers to other subscribers.
+ * `.on()`/`.subscribe()` need a `WebSocket` global, such as Node >=22 or an
+ * injected implementation. That runtime capability does not grant channel
+ * authority. For browser data updates, use a named `sw.db.live` view; member,
+ * policy, and relation-filtered live views are currently unsupported.
  *
  * Resilience (tsk_e70c3713): `.subscribe()` AUTO-RECONNECTS with exponential
  * backoff + jitter and re-subscribes the same channel when the socket drops

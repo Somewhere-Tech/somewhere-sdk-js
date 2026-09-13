@@ -13,7 +13,12 @@ await data.notes.update(noteId, { done: true })
 await data.notes.remove(noteId)
 ```
 
-The generated client exposes only the operations and fields declared in each table's `client` grant. Relations declared in the schema are available through generated `relations.<name>.list(...)` methods. Put product authorization and trusted database work in server functions with the runtime `sw.db` API.
+The generated client exposes only the operations and fields declared in each
+table's `client` grant. A readable declared relation is available through a
+generated `relations.<name>.list(...)` method only when both participating
+tables grant browser reads; hidden linking fields remain internal. Put product
+authorization and trusted database work in server functions with the runtime
+`sw.db` API.
 
 Use `@somewhere-tech/sdk` when application code needs the maintained auth adapters, function invocation, or an explicit server/non-browser client for platform resources. The package keeps its established root exports and result shapes for existing applications, but it is not a replacement for the generated browser data client.
 
@@ -39,7 +44,9 @@ Browser sessions use same-origin httpOnly cookies. Page JavaScript holds no deve
 ```ts
 import { createClient } from '@somewhere-tech/sdk'
 
-const client = createClient('https://booking-app.somewhere.tech')
+const client = createClient('https://booking-app.somewhere.site', undefined, {
+  projectId: 'booking-app',
+})
 
 const { data, error } = await client.auth.signInWithPassword({
   email: 'person@example.com',
@@ -51,7 +58,11 @@ const result = await client.functions.invoke('checkout', {
 })
 ```
 
-`functions.invoke(name, options)` calls `https://<project>.somewhere.tech/api/<name>`, includes browser cookies, and returns `{ data, error }`. On a custom domain, pass the project explicitly:
+`functions.invoke(name, options)` calls `/api/<name>` on the application URL,
+includes browser cookies, and returns `{ data, error }`. Current
+`.somewhere.site` and custom-domain URLs require an explicit `projectId` for
+project-resource calls. Automatic project-id inference is retained only for
+legacy `*.somewhere.tech` application URLs.
 
 ```ts
 const client = createClient('https://app.example.com', undefined, {
@@ -140,9 +151,11 @@ const signed = await avatars.createSignedUrl('user-42.png', 3600)
 
 Use a server/non-browser credential for private file reads and writes. Public and signed URLs can be consumed by browsers.
 
-## Realtime
+## Developer broadcast channels and browser live views
 
-Broadcast channels use `client.channel(name)` or `client.realtime.channel(name)`:
+Developer-authorized server and non-browser clients can use
+`client.channel(name)` or `client.realtime.channel(name)` for broadcast
+channels:
 
 ```ts
 const channel = client
@@ -161,7 +174,14 @@ await channel.send({
 channel.unsubscribe()
 ```
 
-Receiving requires a `WebSocket` global. `presence` and `postgres_changes` listener names remain accepted by the existing API but are not active data-change subscriptions.
+Receiving also requires a `WebSocket` global. A WebSocket global alone does
+not grant access: app-user and visitor channel requests are refused with
+`403 CHANNEL_FORBIDDEN`.
+
+For live browser interfaces, declare a named `sw.db.live` view and use the
+generated browser subscription. See `docs({ topic: 'live-data' })` for that
+contract and its scope limits: member and policy scopes are not subscribable,
+and relation-filtered live views are refused.
 
 ## Error handling
 

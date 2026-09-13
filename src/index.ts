@@ -146,7 +146,9 @@ export class Somewhere {
   }
 
   /**
-   * Realtime channel entry point. Alias of
+   * Developer-authorized server/non-browser channel entry point. App-user and
+   * visitor channel requests are refused; browser data updates use declared
+   * named live views. Alias of
    * `sw.realtime.channel(name)`:
    *
    *     sw.channel('room')
@@ -175,10 +177,10 @@ export default Somewhere;
 /* ─── createClient factory ───────────────────────────────────── */
 
 /**
- * Derive the project id from a `*.somewhere.tech` URL's subdomain. Returns
- * `undefined` for custom domains / api hosts / bare hosts — the caller must
- * then pass `projectId` explicitly (we never guess a project from a custom
- * domain). The seam is loud: an unresolved project id surfaces as a clear
+ * Derive the project id from a legacy `*.somewhere.tech` application URL's
+ * subdomain. Current `*.somewhere.site` URLs, custom domains, API hosts, and
+ * bare hosts return `undefined`; pass `projectId` explicitly for project
+ * resources. The seam is loud: an unresolved project id surfaces as a clear
  * error on the first call that needs one.
  */
 export function projectIdFromUrl(url: string): string | undefined {
@@ -199,16 +201,19 @@ export function projectIdFromUrl(url: string): string | undefined {
  * Create a somewhere.tech client from an application URL:
  *
  *     import { createClient } from '@somewhere-tech/sdk'
- *     const client = createClient(SOMEWHERE_URL)
+ *     const client = createClient('https://booking-app.somewhere.site', undefined, {
+ *       projectId: 'booking-app',
+ *     })
  *
  *     await client.auth.signInWithPassword({ email, password })
  *     await client.functions.invoke('checkout', { body: { plan: 'pro' } })
  *
- * - `somewhereUrl` — your project's URL (`https://<project>.somewhere.tech`).
- *   Used as the `functions.invoke` host and to infer the project id. For a
- *   custom domain, pass `{ projectId }` in the options.
- * - `somewhereKey` — omit in a browser cookie app. For non-browser/
- *   use, pass an app-user JWT or a developer `smt_` key
+ * - `somewhereUrl` — your application's URL. Used as the `functions.invoke`
+ *   host. Pass `{ projectId }` for current `*.somewhere.site` URLs and custom
+ *   domains; automatic inference is retained for legacy `*.somewhere.tech`
+ *   application URLs only.
+ * - `somewhereKey` — omit in a browser cookie app. For non-browser use, pass
+ *   an app-user JWT or a developer `smt_` key
  *   (server-only). Detected by the `smt_` prefix.
  *
  * Database / auth / storage calls go to the platform REST base
