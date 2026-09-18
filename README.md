@@ -154,7 +154,7 @@ Use a server/non-browser credential for private file reads and writes. Public an
 
 For live browser interfaces, declare a named `sw.db.live` view and use the
 browser subscription helper. That surface is a platform capability, not an SDK
-one; see the platform's live-view contract documentation for its scope limits:
+one; see `docs({ topic: 'live' })` for its scope limits:
 member and policy scopes are not subscribable, and relation-filtered live views
 are refused.
 
