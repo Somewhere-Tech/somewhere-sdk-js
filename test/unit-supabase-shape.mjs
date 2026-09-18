@@ -1,7 +1,6 @@
 // Pure, no-network unit tests for the Supabase-shape surface added in v0.4.0:
-// createClient, projectIdFromUrl, functions.invoke, auth.onAuthStateChange,
-// and the realtime frame-dispatch contract. Runs against the built ESM in
-// dist/esm. No SMT_KEY / network required.
+// createClient, projectIdFromUrl, functions.invoke, auth.onAuthStateChange.
+// Runs against the built ESM in dist/esm. No SMT_KEY / network required.
 //
 //   npm run build && node test/unit-supabase-shape.mjs
 
@@ -9,7 +8,6 @@ import {
   Somewhere,
   createClient,
   projectIdFromUrl,
-  dispatchRealtimeFrame,
 } from '../dist/esm/index.js';
 
 let failures = 0;
@@ -66,7 +64,6 @@ async function main() {
   check('has .from', typeof c1.from === 'function');
   check('has .auth', !!c1.auth);
   check('has .storage', !!c1.storage);
-  check('has .channel', typeof c1.channel === 'function');
   check('has .functions.invoke', typeof c1.functions?.invoke === 'function');
 
   /* ── from().select().eq() builds the structured /db/query body ──── */
@@ -144,36 +141,6 @@ async function main() {
     const before = events.length;
     await sw.auth.signInWithPassword({ email: 'a@b.c', password: 'pw' });
     check('no events after unsubscribe', events.length === before);
-  }
-
-  /* ── dispatchRealtimeFrame (the WS framing contract) ───────────── */
-  console.log('dispatchRealtimeFrame');
-  {
-    const got = [];
-    const regs = [
-      { filterEvent: 'message', handler: (m) => got.push(['msg', m]) },
-      { filterEvent: '*', handler: (m) => got.push(['all', m]) },
-    ];
-    // canonical publish frame
-    const n1 = dispatchRealtimeFrame({ type: 'event', event: 'message', data: { text: 'hi' } }, regs);
-    check('event/"message" fires both message + *', n1 === 2);
-    await eq('payload is frame.data', got[0][1].payload, { text: 'hi' });
-    await eq('payload shape', { type: got[0][1].type, event: got[0][1].event }, { type: 'broadcast', event: 'message' });
-
-    got.length = 0;
-    // a different event name only fires the wildcard
-    const n2 = dispatchRealtimeFrame({ type: 'event', event: 'cursor', data: 1 }, regs);
-    check('event/"cursor" fires only *', n2 === 1 && got[0][0] === 'all');
-
-    got.length = 0;
-    // legacy/peer message frame
-    const n3 = dispatchRealtimeFrame({ type: 'message', message: { a: 1 } }, regs);
-    check('legacy message fires message + *', n3 === 2);
-    await eq('legacy payload is frame.message', got[0][1].payload, { a: 1 });
-
-    // junk frames never throw / never fire
-    check('non-object frame → 0', dispatchRealtimeFrame(null, regs) === 0);
-    check('unknown type → 0', dispatchRealtimeFrame({ type: 'noise' }, regs) === 0);
   }
 
   /* ── rpc(name, args) → functions.invoke ────────────────────────── */

@@ -92,11 +92,12 @@ power and hands you the work. A platform takes the work.
 The point of doing this in the platform is that we can keep making your app
 faster **without you shipping anything.** The seam is already in place:
 
-- **Realtime-driven invalidation.** somewhere already streams Postgres change
-  events. The next step wires those events straight into the cache: when a row
-  in `todos` changes anywhere, every client caching `todos` drops it and
-  refetches — live, automatic, no `invalidate` call in your app. The hook is
-  already public (`sw.invalidate(table)`); we're connecting the other end.
+- **Change-event-driven invalidation.** somewhere already streams Postgres
+  change events (`sw.db.live` on the platform side). The next step wires those
+  events straight into the cache: when a row in `todos` changes anywhere, every
+  client caching `todos` drops it and refetches — live, automatic, no
+  `invalidate` call in your app. The hook is already public
+  (`sw.invalidate(table)`); we're connecting the other end.
 - **Adaptive staleTime.** The platform sees read/write frequency per table. A
   table that's written once an hour can be cached far longer than the 1s
   default; a hot table, shorter. The platform can tune this per table from real

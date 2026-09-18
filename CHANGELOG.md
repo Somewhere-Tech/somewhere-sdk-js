@@ -6,6 +6,52 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## 0.8.0 — The realtime surface is removed
+
+Supersedes 0.7.6.
+
+**Breaking (removal).** `sw.realtime`, `sw.channel(name)`, `createClient(...)
+.channel(name)`, the `RealtimeClient` / `RealtimeChannelClient` classes, the
+`dispatchRealtimeFrame` helper and the `ChannelStatus`,
+`RealtimeBroadcastPayload`, `RealtimeBroadcastResponse` and
+`RealtimeMetaResponse` types are gone. There is no alias and no deprecation
+shim: the platform retired the caller-named channel API on 2026-09-18, the
+`/v1/realtime/*` routes no longer exist (a developer key gets
+`403 ROUTE_FORBIDDEN`), and an SDK method that can only fail is worse than no
+method. Pre-1.0, the clean contract wins.
+
+### Removed
+- `src/resources/realtime.ts` and `src/resources/realtime-reconnect.ts`, with
+  their tests and the `Client.realtimeToken` / `Client.wsBaseUrl` accessors
+  that existed only to open the channel WebSocket.
+- The README's broadcast-channel section and `channel(name)` from the list of
+  namespaces the explicit client retains. The README's browser live-view
+  guidance stays.
+- 0.7.6's reframing of this surface, which had just relabelled the channel API
+  as developer-authorized and documented a `403 CHANNEL_FORBIDDEN` refusal for
+  app-user and visitor requests. That distinction is moot now that the routes
+  themselves are gone: every caller, developer key included, gets
+  `403 ROUTE_FORBIDDEN`.
+
+### Notes for upgraders
+- **Server-side fan-out and browser subscribe have no SDK replacement in this
+  release.** The platform's two signed system channels now live at
+  `POST /v1/events/subscribe` and `POST /v1/events/subscribe-user` (MCP:
+  `events_subscribe_project`, `events_subscribe_user`). If the SDK grows a
+  first-class client for them, that is where it will point — it is deliberately
+  not built here.
+- **Postgres change streams are unaffected.** `sw.db.live` and `/__sw/live/*`
+  are platform surfaces that keep working; this SDK was never their client.
+- **The cache's invalidation seam is unaffected.** `sw.invalidate(table)` is
+  still public — wire it to whatever change signal your app has. 0.7.5/0.7.6
+  changed its internals (generation-fenced cache warming, session-transition
+  clearing); the public seam is the same call.
+- **0.7.5 and 0.7.6 have no entries below.** Both shipped from master — the db
+  query-array adapter, the cache result-shape isolation, and the browser
+  authority / live-view doc contracts — and the version moved to 0.7.6 in
+  `package.json` without notes being written. Those notes are not this lane's
+  to author; the changes are in `9a1a642..97a4ad8`.
+
 ## 0.7.4 — Sign-in sets the session cookie by default
 
 ### Fixed

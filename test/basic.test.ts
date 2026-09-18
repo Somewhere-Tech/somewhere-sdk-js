@@ -47,7 +47,7 @@ async function cacheApiTypeChecks(): Promise<void> {
   void warmed;
 
   // A write self-invalidates the table (read-your-own-writes). The manual /
-  // realtime-invalidation seam is also public:
+  // event-invalidation seam is also public:
   await sw.from('todos').insert({ title: 'ship the cache' });
   sw.invalidate('todos');
 }

@@ -113,7 +113,7 @@ export class Client {
   /**
    * Drop cached `from().select()` reads for a table. Invoked automatically
    * after a write to the table (read-your-own-writes); also the public seam
-   * for realtime-driven invalidation. No-op when the cache is disabled.
+   * for event-driven invalidation. No-op when the cache is disabled.
    */
   invalidateTable(table: string): void {
     this.cache?.invalidate(table);
@@ -155,9 +155,9 @@ export class Client {
   }
 
   /**
-   * The `Authorization` value a project-function or realtime call should
-   * carry: the active user session if signed in, else the construction
-   * key/token. Same precedence as `dual` mode.
+   * The `Authorization` value a project-function call should carry: the
+   * active user session if signed in, else the construction key/token.
+   * Same precedence as `dual` mode.
    */
   get sessionOrInitialBearer(): string {
     const header = this.sessionAuthHeader ?? this.initialAuthHeader;
@@ -173,20 +173,6 @@ export class Client {
       });
     }
     return header;
-  }
-
-  /**
-   * Raw bearer token (no `Bearer ` prefix) for contexts that can't send
-   * an Authorization header — notably the realtime WebSocket, which takes
-   * the token as a `?token=` query param.
-   */
-  get realtimeToken(): string {
-    return this.sessionOrInitialBearer.replace(/^Bearer\s+/i, '');
-  }
-
-  /** REST base with the http(s) scheme swapped to ws(s) for realtime upgrades. */
-  get wsBaseUrl(): string {
-    return this.baseUrl.replace(/^http/i, 'ws');
   }
 
   /** Low-level fetch passthrough for absolute URLs (project function hosts). */

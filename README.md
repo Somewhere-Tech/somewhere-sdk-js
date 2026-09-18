@@ -108,7 +108,6 @@ The explicit client retains these established namespaces:
 - `fs` and `storage.from(prefix)` for server/non-browser files
 - `auth` for user sessions and account actions
 - `functions.invoke(name, options)` for application functions
-- `realtime` and `channel(name)` for broadcast channels
 - `emails`, `inbox`, `chat`, `payments`, `video`, `calls`, `tasks`, and `projects`
 
 ## Fluent database client
@@ -151,37 +150,13 @@ const signed = await avatars.createSignedUrl('user-42.png', 3600)
 
 Use a server/non-browser credential for private file reads and writes. Public and signed URLs can be consumed by browsers.
 
-## Developer broadcast channels and browser live views
-
-Developer-authorized server and non-browser clients can use
-`client.channel(name)` or `client.realtime.channel(name)` for broadcast
-channels:
-
-```ts
-const channel = client
-  .channel('room-42')
-  .on('broadcast', { event: 'message' }, ({ payload }) => {
-    console.log(payload)
-  })
-  .subscribe()
-
-await channel.send({
-  type: 'broadcast',
-  event: 'message',
-  payload: { text: 'hello' },
-})
-
-channel.unsubscribe()
-```
-
-Receiving also requires a `WebSocket` global. A WebSocket global alone does
-not grant access: app-user and visitor channel requests are refused with
-`403 CHANNEL_FORBIDDEN`.
+## Browser live views
 
 For live browser interfaces, declare a named `sw.db.live` view and use the
-browser subscription helper. See `docs({ topic: 'realtime' })` for that
-contract and its scope limits: member and policy scopes are not subscribable,
-and relation-filtered live views are refused.
+browser subscription helper. That surface is a platform capability, not an SDK
+one; see the platform's live-view contract documentation for its scope limits:
+member and policy scopes are not subscribable, and relation-filtered live views
+are refused.
 
 ## Error handling
 

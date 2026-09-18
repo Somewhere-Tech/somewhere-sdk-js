@@ -110,13 +110,6 @@ export interface AuthSubscription {
   data: { subscription: { unsubscribe: () => void } };
 }
 
-/** Payload delivered to a `.on('broadcast', { event }, handler)` listener. */
-export interface RealtimeBroadcastPayload {
-  type: 'broadcast';
-  event: string;
-  payload: unknown;
-}
-
 /**
  * Every mutating call (db, storage, auth, emails) returns this shape.
  * `error` is null on success, and
@@ -326,20 +319,6 @@ export interface PaymentsCheckoutResponse {
 
 export interface PaymentsDashboardLinkResponse {
   url: string;
-}
-
-/* ─── Realtime (broadcast channels shape) ─────────────────────────── */
-
-export interface RealtimeBroadcastResponse {
-  delivered: number;
-  channel: string;
-}
-
-export interface RealtimeMetaResponse {
-  channel: string;
-  subscribers: number;
-  /** RFC-3339 timestamp or null if no message has been broadcast. */
-  last_message_at: string | null;
 }
 
 /* ─── Video (Cloudflare Stream wrapper) ──────────────────────────── */

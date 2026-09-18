@@ -18,7 +18,7 @@ import type { Result } from './types.js';
  * The cache is owned by a single `Client` instance. Session transitions
  * clear its entries and detach pending reads from the next session.
  *
- * REALTIME-INVALIDATION SEAM (future, not built here): a realtime event for a
+ * EVENT-INVALIDATION SEAM (future, not built here): a change event for a
  * table should call {@link QueryCache.invalidate} for that table — the exact
  * same path invalidate-on-write uses. That's the whole integration point.
  */
@@ -115,7 +115,7 @@ export class QueryCache {
 
   /**
    * Drop every cached read for a table. Called automatically after a write to
-   * that table (read-your-own-writes); also the public realtime/manual seam.
+   * that table (read-your-own-writes); also the public event/manual seam.
    */
   invalidate(table: string): void {
     this.generations.set(table, (this.generations.get(table) ?? 0) + 1);

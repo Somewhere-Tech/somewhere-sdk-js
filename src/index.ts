@@ -14,10 +14,6 @@ import {
   SomewhereQueryBuilder,
 } from './resources/postgrest.js';
 import type { Result } from './types.js';
-import {
-  RealtimeChannelClient,
-  RealtimeClient,
-} from './resources/realtime.js';
 import { StorageClient, StorageFileApi } from './resources/storage.js';
 import { TasksClient } from './resources/tasks.js';
 import { ProjectsClient } from './resources/projects.js';
@@ -40,12 +36,6 @@ export { FsClient } from './resources/fs.js';
 export { FunctionsClient } from './resources/functions.js';
 export { ChatClient, ChatCompletionsClient } from './resources/chat.js';
 export { PaymentsClient } from './resources/payments.js';
-export {
-  RealtimeClient,
-  RealtimeChannelClient,
-  dispatchRealtimeFrame,
-} from './resources/realtime.js';
-export type { ChannelStatus } from './resources/realtime.js';
 export { VideoClient } from './resources/video.js';
 export { InboxClient, InboxAddressesClient, InboxMessagesClient } from './resources/inbox.js';
 export { CallsClient } from './resources/calls.js';
@@ -64,7 +54,6 @@ export type { SomewhereOptions };
  *   - `sw.fs.read(path)` / `sw.fs.write(path, body)` — raw filesystem
  *   - `sw.storage.from(bucket)`      — prefix-oriented file API
  *   - `sw.auth`                      — application auth
- *   - `sw.realtime.channel(name)`    — broadcast channels
  *   - `sw.emails.send(...)`          — Resend email
  *   - `sw.inbox.messages.list(...)`  — inbound email
  *   - `sw.chat.completions.create()` — OpenAI chat completions
@@ -87,7 +76,6 @@ export class Somewhere {
   readonly inbox: InboxClient;
   readonly chat: ChatClient;
   readonly payments: PaymentsClient;
-  readonly realtime: RealtimeClient;
   readonly functions: FunctionsClient;
   readonly video: VideoClient;
   readonly calls: CallsClient;
@@ -106,7 +94,6 @@ export class Somewhere {
     this.inbox = new InboxClient(this.client);
     this.chat = new ChatClient(this.client);
     this.payments = new PaymentsClient(this.client);
-    this.realtime = new RealtimeClient(this.client);
     this.functions = new FunctionsClient(this.client);
     this.video = new VideoClient(this.client);
     this.calls = new CallsClient(this.client);
@@ -138,25 +125,12 @@ export class Somewhere {
   /**
    * Drop cached `from().select()` reads for a table. Read-your-own-writes is
    * already automatic (writes self-invalidate); reach for this to invalidate
-   * by hand — e.g. from a realtime event handler (the realtime-invalidation
-   * seam: `sw.channel('db:posts').on(..., () => sw.invalidate('posts'))`).
+   * by hand — e.g. from whatever tells your app a row changed:
+   *
+   *     onRowChanged('posts', () => sw.invalidate('posts'))
    */
   invalidate(table: string): void {
     this.client.invalidateTable(table);
-  }
-
-  /**
-   * Developer-authorized server/non-browser channel entry point. App-user and
-   * visitor channel requests are refused; browser data updates use declared
-   * named live views. Alias of
-   * `sw.realtime.channel(name)`:
-   *
-   *     sw.channel('room')
-   *       .on('broadcast', { event: 'message' }, ({ payload }) => { ... })
-   *       .subscribe()
-   */
-  channel(name: string, opts: { projectId?: string } = {}): RealtimeChannelClient {
-    return this.realtime.channel(name, opts);
   }
 
   /**
