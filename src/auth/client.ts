@@ -30,10 +30,12 @@
  * `credentials: 'include'`, and caches only the (non-secret) user object for
  * optimistic rendering. Mode is negotiated per sign-in: the client hints
  * `X-Sw-Auth-Mode: cookie`; only a server that actually set the cookies
- * replies `cookie_session: true`. An older backend that doesn't ⇒ the client
- * falls back to header mode for that session, so nothing breaks and nobody
- * is logged out. An EXISTING stored header session is adopted as-is (no
- * forced re-auth) and migrates to cookies transparently on the next login.
+ * replies `cookie_session: true`. A backend that doesn't (its handler omits
+ * cookie mode) gets a typed `AuthError` with code
+ * `COOKIE_SESSION_NOT_CONFIRMED` and NOTHING is stored — the client never
+ * quietly puts a token pair where page scripts can read it (0.9.0). An
+ * EXISTING stored header session is adopted as-is (no forced re-auth) and
+ * migrates to cookies transparently on the next login.
  *
  * The token trio originates from the app's own backend (login/signup are
  * developer-key-gated on the platform, so they can't be called from the
@@ -138,9 +140,9 @@ const REFRESH_ROTATE_HEADER = 'X-New-Refresh-Token';
 const RIDE_ALONG_HEADER = 'X-Refresh-Token';
 // Sent on sign-in calls when this client prefers cookies; a cookie-capable
 // backend answers by setting the httpOnly pair and replying
-// `cookie_session: true` INSTEAD of tokens. The handshake is what makes the
-// rollout dual-mode: an older backend ignores the hint, returns tokens, and
-// this client silently falls back to header mode — no one gets logged out.
+// `cookie_session: true` INSTEAD of tokens. A backend that ignores the hint
+// is refused with COOKIE_SESSION_NOT_CONFIRMED rather than adopted as a
+// header session.
 const MODE_HINT_HEADER = 'X-Sw-Auth-Mode';
 
 function memoryStorage(): StorageLike {
@@ -403,9 +405,22 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       else await getUser();
       return user as User;
     }
-    // COMPATIBILITY MODE: explicit non-browser header mode, or a cookie-preferring
-    // client whose older backend did not confirm cookies. Rule 9 requires this
-    // fallback until existing 0.1.x integrations have migrated.
+    // Cookie mode was requested and the server did not confirm it: the
+    // handler omitted cookie mode (a pasted or pre-0.2.0 handler). Storing the
+    // tokens it returned would leave the session where page scripts can read
+    // it, so fail loudly and store nothing (pfb_961179f4970e).
+    if (preferCookie) {
+      throw new AuthError(
+        `Sign-in reached ${url(path)} but the server did not confirm a cookie session, so nothing was stored. ` +
+          `The handler there does not support cookie mode: mount the SDK's handler ` +
+          `(export { somewhereAuth as default } from '@somewhere-tech/sdk/server'), or make yours set the ` +
+          `session cookies and reply { user, cookie_session: true } when the request has X-Sw-Auth-Mode: cookie.`,
+        res.status,
+        'COOKIE_SESSION_NOT_CONFIRMED',
+      );
+    }
+    // Header mode (explicit, or the non-browser default): the caller asked
+    // for tokens in storage.
     const tokens = pickTokens(body);
     if (!tokens) throw new AuthError('Auth response did not include a session.', res.status);
     setSession({ accessToken: tokens.access, refreshToken: tokens.refresh });
@@ -583,9 +598,13 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
 
 export class AuthError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  /** Set when the client itself refuses a response, e.g.
+   *  'COOKIE_SESSION_NOT_CONFIRMED'. Undefined for server-reported failures. */
+  code?: string;
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = 'AuthError';
     this.status = status;
+    if (code !== undefined) this.code = code;
   }
 }

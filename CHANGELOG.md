@@ -6,6 +6,45 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## 0.9.0 (unreleased) — Cookie sign-in fails loudly; Subscribe and Manage billing work
+
+**Breaking (browser sign-in against a handler without cookie mode).**
+
+### Changed
+- **A browser sign-in that the server doesn't confirm as a cookie session now
+  throws instead of storing tokens.** `createSomewhereAuth()` in a browser (or
+  with `mode: 'cookie'`) asks your `/api/auth` handler for a cookie session.
+  When the handler does not reply `cookie_session: true`, `signIn`, `signUp`,
+  `verifyMagicLink` and the OAuth completions now throw an `AuthError` with
+  `code: 'COOKIE_SESSION_NOT_CONFIRMED'` and store nothing. The message names
+  the fix: mount `somewhereAuth` from `@somewhere-tech/sdk/server`, or make
+  your handler set the session cookies and reply
+  `{ user, cookie_session: true }`. Before, the client quietly kept the
+  returned token pair in `localStorage`, where page scripts can read it.
+- `AuthError` has an optional `code`, set when the client itself refuses a
+  response.
+
+### Fixed
+- **The `<PricingTable>` Subscribe button starts a checkout.** The packaged
+  handler's `/billing/checkout` route called
+  `sw.payments.checkoutForUser(userId, opts)`, but the runtime takes one
+  `opts` argument and derives the buyer from the signed-in user, so every
+  Subscribe click failed with `sw.payments.checkoutForUser: opts.plan is
+  required`.
+- **`<BillingPortal>` (Manage billing) opens the portal.** The same mismatch
+  in `/billing/portal` dropped `return_url`, so every click failed with
+  `return_url is required.`
+
+### Notes for upgraders
+- **Apps on the default starter or the packaged `somewhereAuth` handler see no
+  change** — that handler already confirms cookie sessions.
+- **A hand-written `/api/auth` handler that returns tokens must be updated**
+  (or replaced with `somewhereAuth`) before upgrading. Scripts, CLIs and native
+  clients that want tokens pass `mode: 'header'`, which is unchanged.
+- A user already holding a stored token pair from a pre-0.2.0 install stays
+  signed in; it moves to cookies on their next sign-in through a cookie-mode
+  handler.
+
 ## 0.8.0 — The realtime surface is removed
 
 Supersedes 0.7.6.

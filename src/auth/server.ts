@@ -63,8 +63,10 @@ export interface SwAuthNamespace {
   /** Payments (sw.payments) — drives the <PricingTable>/<BillingPortal> flows.
    *  Optional so the handler degrades cleanly on an older runtime. */
   payments?: {
-    checkoutForUser(userId: string, opts: { plan: string; success_url?: string; cancel_url?: string }): Promise<{ url?: string } & Record<string, unknown>>;
-    portalForUser(userId: string, opts: { return_url?: string }): Promise<{ url?: string } & Record<string, unknown>>;
+    // The runtime derives the buyer from the request's signed-in user; it takes
+    // no user id (runtime v2, 2026-08-02).
+    checkoutForUser(opts: { plan: string; success_url?: string; cancel_url?: string }): Promise<{ url?: string } & Record<string, unknown>>;
+    portalForUser(opts: { return_url?: string }): Promise<{ url?: string } & Record<string, unknown>>;
   };
 }
 
@@ -240,10 +242,11 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
       return json({ plans: result?.plans ?? [] });
     }
     // Start a subscription checkout for the SIGNED-IN user (<PricingTable>'s
-    // Subscribe button). SECURITY: the buyer is resolved from the session via
-    // fromRequest — NEVER a body-supplied id — so there's no IDOR on a money
-    // op. The only client input is which plan slug to buy. The worker resolves
-    // that plan's price from the billing catalog.
+    // Subscribe button). SECURITY: the runtime derives the buyer from the
+    // request's signed-in user — NEVER a body-supplied id — so there's no IDOR
+    // on a money op; fromRequest here only answers a clean 401 first. The only
+    // client input is which plan slug to buy. The worker resolves that plan's
+    // price from the billing catalog.
     if (method === 'POST' && sub === '/billing/checkout') {
       if (typeof sw.payments?.checkoutForUser !== 'function') {
         return json({ error: 'NOT_FOUND', message: 'Billing is not available on this runtime.' }, 404);
@@ -254,7 +257,7 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
       if (typeof b.plan !== 'string' || !b.plan) {
         return json({ error: 'VALIDATION_ERROR', message: 'plan is required.' }, 400);
       }
-      const result = await sw.payments.checkoutForUser(me.id, {
+      const result = await sw.payments.checkoutForUser({
         plan: b.plan,
         success_url: typeof b.success_url === 'string' ? b.success_url : undefined,
         cancel_url: typeof b.cancel_url === 'string' ? b.cancel_url : undefined,
@@ -262,8 +265,8 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
       return json(result);
     }
     // Open the Stripe billing portal for the SIGNED-IN user (<BillingPortal>).
-    // SECURITY: same as checkout — the worker resolves this user's
-    // stripe_customer_id from their session id server-side; no id crosses from
+    // SECURITY: same as checkout — the runtime resolves this user's
+    // stripe_customer_id from their session server-side; no id crosses from
     // the browser, so a user can only ever manage their OWN subscription.
     if (method === 'POST' && sub === '/billing/portal') {
       if (typeof sw.payments?.portalForUser !== 'function') {
@@ -272,7 +275,7 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
       const me = (await sw.auth.fromRequest(req)) as { id?: string } | null;
       if (!me || !me.id) return json({ error: 'AUTH_REQUIRED', message: 'Sign in required.' }, 401);
       const b = await readBody();
-      const result = await sw.payments.portalForUser(me.id, {
+      const result = await sw.payments.portalForUser({
         return_url: typeof b.return_url === 'string' ? b.return_url : undefined,
       });
       return json(result);
