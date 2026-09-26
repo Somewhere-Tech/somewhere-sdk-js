@@ -16,6 +16,10 @@ import type {
  * "Buckets" are prefix directories under the project's file namespace:
  * `sw.storage.from('avatars').upload('a.png', ...)` writes to
  * `/v1/fs/{project_id}/avatars/a.png`.
+ *
+ * For browser uploads with per-user or per-team rules, declare a file
+ * collection in db/schema.ts and use the generated `somewhere:files` client
+ * instead: docs({ topic: 'declared-files' }).
  */
 export class StorageClient {
   constructor(private readonly client: Client) {}
