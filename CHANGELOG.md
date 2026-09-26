@@ -6,7 +6,7 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
-## 0.9.0 (unreleased) — Cookie sign-in fails loudly; Subscribe and Manage billing work
+## 0.9.0 (2026-09-26) — Cookie sign-in fails loudly; Subscribe and Manage billing work
 
 **Breaking (browser sign-in against a handler without cookie mode).**
 
