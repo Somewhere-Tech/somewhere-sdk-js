@@ -13,16 +13,15 @@
  * platform (can't be called from the browser), which is exactly why this thin
  * server shim exists.
  *
- * SESSION TRANSPORT: every successful sign-in sets the session as httpOnly
- * `__Host-` cookies whenever the runtime exposes `sw.auth.setSessionCookies`,
- * so a plain `fetch('/api/auth/login', { credentials: 'include' })` — the
- * published browser happy path — persists the session with no header to
- * remember. `X-Sw-Auth-Mode` selects the RESPONSE BODY, not whether a session
- * exists: `cookie` returns only `{ user, cookie_session: true }` (tokens never
- * enter page JS), every other caller keeps the 0.1.x token-bundle body
- * unchanged, and `token` opts out of the cookie entirely for a backend that
- * mints its own. Before tsk_d05a6cfb the cookie was header-gated, so the
- * documented browser flow signed up successfully and then had no session.
+ * SESSION TRANSPORT: a successful sign-in sets the session as httpOnly
+ * `__Host-` cookies and answers `{ user, cookie_session: true }` — tokens
+ * never reach page JS. That is the answer for every caller that does not opt
+ * out, including a plain `fetch('/api/auth/login', { credentials: 'include' })`
+ * with no header (pfb_e1254f754222). Only an explicit
+ * `X-Sw-Auth-Mode: header` (aliases `token`, `bearer`) — a server or native
+ * client that holds its own session — receives the token pair in the body, and
+ * then no cookie is set. A runtime that cannot set the cookie refuses
+ * (COOKIE_SESSION_UNAVAILABLE) instead of falling back to tokens.
  *
  * Covered today: email/password (signup, login, logout), magic-link/OTP,
  * Google/GitHub/Discord OAuth (url + exchange), and `me` (validate + refresh).
@@ -106,37 +105,26 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
   const sub = (m && m[1]) || '/';
   const method = req.method.toUpperCase();
 
-  // SESSION COOKIES ARE THE DEFAULT (platform tsk_d05a6cfb).
+  // SESSION COOKIES ARE THE ONLY DEFAULT (platform tsk_d05a6cfb, pfb_e1254f754222).
   //
-  // Until now the httpOnly pair was set ONLY when the caller sent
-  // `X-Sw-Auth-Mode: cookie` — which the @somewhere-tech/sdk/auth client sends
-  // and a plain `fetch(..., { credentials: 'include' })` does not. So the
-  // published browser happy path (AGENT.md's lead example, docs({ topic:
-  // 'auth-client' }) §3) got a 200 with no `Set-Cookie` at all against the
-  // scaffold's `api/auth/[...path]` route: sign-up succeeded and the session
-  // never persisted. The header now selects the RESPONSE BODY, not whether a
-  // session exists.
-  //
-  // What each caller sees after this change:
-  //   `X-Sw-Auth-Mode: cookie`  — cookies + `{ user, cookie_session: true }`. Unchanged.
-  //   no header (raw fetch, non-browser client, pre-0.2.0 client)
-  //                             — cookies, AND the 0.1.x token bundle body,
-  //                               byte-identical to what it received before.
-  //                               Nothing that reads `access_token` breaks; a
-  //                               client with no cookie jar ignores the header.
-  //   `X-Sw-Auth-Mode: token`   — the rule-9 opt-out: no cookie is ever set.
-  //                               For a backend that mints its own session
-  //                               cookie from the returned tokens and does not
-  //                               want the platform pair alongside it.
+  // A browser must never receive the token pair: a body the page can read is
+  // a session any injected script can steal. Before 0.10.0 a caller with no
+  // `X-Sw-Auth-Mode` header got the cookie AND the 0.1.x token bundle in the
+  // body, so a plain-fetch browser sign-in handed JS-readable tokens to the
+  // page. What each caller sees now:
+  //   no header, or `cookie`    — cookies + `{ user, cookie_session: true }`.
+  //   `header` (or `token`/`bearer`) — the explicit opt-in for a server or
+  //                               native client that holds its own session:
+  //                               the token bundle, and no cookie is set.
   // An app that sets its OWN cookie is untouched either way: this handler only
   // ever adds the platform `__Host-` pair, and never reads or clears another
   // name.
   const modeHint = (req.headers.get('X-Sw-Auth-Mode') || '').toLowerCase();
-  const wantsCookie = modeHint === 'cookie';
-  const refusesCookie = modeHint === 'token' || modeHint === 'bearer' || modeHint === 'header';
-  // Optional on the namespace so an older baked runtime degrades to token
-  // bodies instead of throwing.
-  const canCookie = !refusesCookie && typeof sw.auth.setSessionCookies === 'function';
+  const tokenMode = modeHint === 'header' || modeHint === 'token' || modeHint === 'bearer';
+  const wantsCookie = !tokenMode;
+  // Optional on the namespace: an older baked runtime without it answers
+  // COOKIE_SESSION_UNAVAILABLE below, never the token pair.
+  const canCookie = wantsCookie && typeof sw.auth.setSessionCookies === 'function';
 
   // Set the httpOnly pair from a platform token bundle. Returns the unwrapped
   // bundle when the session was staged, or null when there is no pair to stage
@@ -153,13 +141,21 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
     return d;
   };
 
-  // Stage the cookies, then answer in the shape this caller asked for: the
-  // cookie handshake when it sent the hint, otherwise the token bundle it has
-  // always received (now accompanied by a session cookie it is free to ignore).
+  // Answer a sign-in: the token bundle only to an explicit opt-in; everyone
+  // else gets the cookie handshake. A bundle with no token pair (an MFA
+  // challenge) carries no session and passes through. A pair this runtime
+  // cannot put in a cookie is refused, never handed to the caller.
   const sessionResponse = (bundle: unknown): Response => {
+    if (tokenMode) return json(bundle);
     const staged = stageSessionCookies(bundle);
-    if (wantsCookie && staged) {
-      return json({ user: staged.user ?? null, cookie_session: true });
+    if (staged) return json({ user: staged.user ?? null, cookie_session: true });
+    const b = (bundle ?? {}) as TokenBundle;
+    const d = b.data ?? b;
+    if (d.token || d.access_token || d.refresh_token) {
+      return json({
+        error: 'COOKIE_SESSION_UNAVAILABLE',
+        message: 'This deploy cannot set a session cookie, so the sign-in was not completed. Redeploy to pick up the current runtime. A server or native client that holds its own session can send X-Sw-Auth-Mode: header to receive tokens instead.',
+      }, 501);
     }
     return json(bundle);
   };

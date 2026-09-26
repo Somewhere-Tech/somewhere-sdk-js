@@ -138,11 +138,11 @@ export interface SomewhereAuthOptions {
 const ACCESS_ROTATE_HEADER = 'X-New-Access-Token';
 const REFRESH_ROTATE_HEADER = 'X-New-Refresh-Token';
 const RIDE_ALONG_HEADER = 'X-Refresh-Token';
-// Sent on sign-in calls when this client prefers cookies; a cookie-capable
-// backend answers by setting the httpOnly pair and replying
-// `cookie_session: true` INSTEAD of tokens. A backend that ignores the hint
-// is refused with COOKIE_SESSION_NOT_CONFIRMED rather than adopted as a
-// header session.
+// Sent on every sign-in call: `cookie` when this client prefers cookies (a
+// cookie-capable backend sets the httpOnly pair and replies
+// `cookie_session: true`; one that ignores the hint is refused with
+// COOKIE_SESSION_NOT_CONFIRMED), `header` in header mode — the explicit
+// opt-in the packaged handler requires before it returns tokens.
 const MODE_HINT_HEADER = 'X-Sw-Auth-Mode';
 
 function memoryStorage(): StorageLike {
@@ -383,7 +383,9 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
 
   async function postForSession(path: string, payload: unknown): Promise<User> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (preferCookie) headers[MODE_HINT_HEADER] = 'cookie';
+    // Header mode must ASK for tokens: a handler answers a request without
+    // the hint with a cookie session only (pfb_e1254f754222).
+    headers[MODE_HINT_HEADER] = preferCookie ? 'cookie' : 'header';
     const res = await fetch(url(path), {
       method: 'POST',
       headers,

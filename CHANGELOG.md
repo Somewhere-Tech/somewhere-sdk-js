@@ -6,6 +6,31 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## 0.10.0 (unreleased) — The packaged sign-in handler never returns tokens unless asked
+
+**Breaking (callers of `somewhereAuth` that read tokens from the response
+without sending a mode header).**
+
+### Changed
+- **`somewhereAuth` answers a sign-in with the cookie session only, unless the
+  caller explicitly asks for tokens.** Before, a request with no
+  `X-Sw-Auth-Mode` header — for example a plain
+  `fetch('/api/auth/login', { credentials: 'include' })` from a page — got the
+  session cookie AND the access and refresh tokens in the response body, where
+  any script on the page could read them. Now signup, login, magic-link verify
+  and the Google/GitHub/Discord exchanges answer
+  `{ user, cookie_session: true }` and set the httpOnly cookie. Only
+  `X-Sw-Auth-Mode: header` (or `token`) returns the token pair, and then no
+  cookie is set — that is for a server or native client that holds its own
+  session.
+- `createSomewhereAuth({ mode: 'header' })` now sends `X-Sw-Auth-Mode: header`
+  on sign-in, so header-mode clients keep receiving tokens from the packaged
+  handler. A header-mode client older than 0.10.0 sends no header and now gets
+  the cookie answer instead: upgrade it together with the handler.
+- A deploy whose runtime cannot set the session cookie answers
+  `501 COOKIE_SESSION_UNAVAILABLE` instead of returning tokens. Redeploying
+  picks up the current runtime.
+
 ## 0.9.0 (2026-09-26) — Cookie sign-in fails loudly; Subscribe and Manage billing work
 
 **Breaking (browser sign-in against a handler without cookie mode).**

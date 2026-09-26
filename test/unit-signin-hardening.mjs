@@ -127,7 +127,7 @@ console.log('header mode (explicit): token bundle is still stored');
   const auth = createSomewhereAuth({ mode: 'header', storage });
   const r = await signInResult(auth);
   check('signIn resolves the user', r.user?.id === 'u1', r.error?.message);
-  check('no cookie-mode hint sent', calls[0]?.headers['X-Sw-Auth-Mode'] === undefined);
+  check('header mode asks for tokens explicitly (X-Sw-Auth-Mode: header)', calls[0]?.headers['X-Sw-Auth-Mode'] === 'header');
   check('token pair stored under sw_auth', JSON.parse(storage.values.get('sw_auth') ?? '{}').accessToken === 'acc_jwt');
 }
 
