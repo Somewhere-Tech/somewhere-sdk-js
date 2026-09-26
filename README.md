@@ -150,6 +150,8 @@ const signed = await avatars.createSignedUrl('user-42.png', 3600)
 
 Use a server/non-browser credential for private file reads and writes. Public and signed URLs can be consumed by browsers.
 
+For browser uploads where each user (or team) sees only their own files, declare a file collection in `db/schema.ts` and use the generated `somewhere:files` client instead of this SDK: see `docs({ topic: 'declared-files' })`.
+
 ## Browser live views
 
 For live browser interfaces, declare a named `sw.db.live` view and use the
