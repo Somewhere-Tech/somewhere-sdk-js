@@ -6,7 +6,7 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
-## 0.10.0 (unreleased) — The packaged sign-in handler never returns tokens unless asked
+## 0.10.0 (2026-09-26) — The packaged sign-in handler never returns tokens unless asked
 
 **Breaking (callers of `somewhereAuth` that read tokens from the response
 without sending a mode header).**
