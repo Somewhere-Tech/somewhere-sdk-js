@@ -12,11 +12,14 @@
  * THE FIX under test: a successful sign-in always stages the httpOnly pair when
  * the runtime can mint it. The header now selects the RESPONSE BODY only.
  *
- * Rule-9 fixtures run BOTH directions: the cookie appears where it was missing,
- * AND every caller that worked before gets the same body it got before —
- * cookie-mode clients, token-bundle clients, an explicit opt-out, an older
- * runtime with no setSessionCookies, a bundle with no token pair, a failed
- * sign-in, and an app that sets a cookie of its own.
+ * pfb_e1254f754222 (0.10.0): a caller with no mode header no longer receives
+ * the token pair in the body — only the cookie handshake. Tokens are returned
+ * ONLY on the explicit `X-Sw-Auth-Mode: header` (or `token`) opt-in, and a
+ * runtime that cannot set the cookie refuses instead of returning tokens.
+ *
+ * Both directions: header-less and cookie-mode sign-ins carry no token
+ * material anywhere in the body; the explicit opt-in still gets the bundle and
+ * no cookie. Plus an MFA challenge, a failed sign-in, and an app cookie.
  */
 import { somewhereAuth } from '@somewhere-tech/sdk/server';
 
@@ -97,12 +100,11 @@ for (const path of ['/api/auth/signup', '/api/auth/login']) {
     r.staged.length === 2
     && r.staged[0] === '__Host-token=access.jwt'
     && r.staged[1] === '__Host-sw_refresh_token=refresh.jwt');
-  check(`${path} with no X-Sw-Auth-Mode still returns the 0.1.x token bundle body`,
+  check(`${path} with no X-Sw-Auth-Mode answers the cookie handshake with NO token in the body`,
     r.res.status === 200
-    && r.body.access_token === 'access.jwt'
-    && r.body.token === 'access.jwt'
-    && r.body.refresh_token === 'refresh.jwt'
-    && r.body.user.id === 'usr_1');
+    && r.body.cookie_session === true
+    && r.body.user.id === 'usr_1'
+    && !JSON.stringify(r.body).includes('.jwt'));
 }
 
 for (const [path, method] of [
@@ -113,6 +115,8 @@ for (const [path, method] of [
 ]) {
   const r = await run(path, {});
   check(`${path} (${method}) stages the session pair with no mode header`, r.staged.length === 2);
+  check(`${path} (${method}) with no mode header returns no token`,
+    r.body.cookie_session === true && !JSON.stringify(r.body).includes('.jwt'));
 }
 
 // ── DIRECTION 2: nothing that worked before changed ──────────────────────────
@@ -126,18 +130,28 @@ check('cookie-mode client: unchanged handshake body, no token material in the bo
 check('cookie-mode client: still routed through loginWithCookie',
   cookieMode.calls.some(([name]) => name === 'loginWithCookie'));
 
-const optOut = await run('/api/auth/login', { 'X-Sw-Auth-Mode': 'token' });
-check('explicit token mode sets NO cookie (the rule-9 opt-out)', optOut.staged.length === 0);
-check('explicit token mode returns the token bundle unchanged',
-  optOut.body.access_token === 'access.jwt' && optOut.body.refresh_token === 'refresh.jwt');
+for (const mode of ['header', 'token']) {
+  for (const path of ['/api/auth/login', '/api/auth/signup', '/api/auth/google']) {
+    const optIn = await run(path, { 'X-Sw-Auth-Mode': mode });
+    check(`explicit ${mode} mode on ${path} sets NO cookie`, optIn.staged.length === 0);
+    check(`explicit ${mode} mode on ${path} returns the token bundle`,
+      optIn.res.status === 200 && optIn.body.access_token === 'access.jwt' && optIn.body.refresh_token === 'refresh.jwt');
+  }
+}
 
-const oldRuntime = await run('/api/auth/login', {}, { canCookie: false });
-check('runtime without setSessionCookies: no throw, no cookie, token bundle body',
-  oldRuntime.res.status === 200
-  && oldRuntime.staged.length === 0
-  && oldRuntime.body.access_token === 'access.jwt');
+for (const headers of [{}, { 'X-Sw-Auth-Mode': 'cookie' }]) {
+  const oldRuntime = await run('/api/auth/login', headers, { canCookie: false });
+  check(`runtime without setSessionCookies (${headers['X-Sw-Auth-Mode'] ?? 'no header'}): refused, no cookie, NO token`,
+    oldRuntime.res.status === 501
+    && oldRuntime.body.error === 'COOKIE_SESSION_UNAVAILABLE'
+    && oldRuntime.staged.length === 0
+    && !JSON.stringify(oldRuntime.body).includes('.jwt'));
+}
+const oldRuntimeOptIn = await run('/api/auth/login', { 'X-Sw-Auth-Mode': 'header' }, { canCookie: false });
+check('runtime without setSessionCookies still serves the explicit header opt-in',
+  oldRuntimeOptIn.res.status === 200 && oldRuntimeOptIn.body.access_token === 'access.jwt');
 
-const noPair = await run('/api/auth/login', {}, { bundle: { mfa_required: true, user: USER } });
+const noPair = await run('/api/auth/google', {}, { bundle: { mfa_required: true, user: USER } });
 check('a bundle with no token pair (mfa_required) stages nothing and passes the body through',
   noPair.staged.length === 0 && noPair.body.mfa_required === true);
 
