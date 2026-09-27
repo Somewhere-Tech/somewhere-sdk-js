@@ -6,7 +6,7 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
-## 0.11.0 (unreleased) — session status, and sign-in/sign-out that cannot land out of order
+## 0.11.0 (2026-09-27) — session status, and sign-in/sign-out that cannot land out of order
 
 Default-semantics changes (per the convention above this is a minor bump;
 the version is set at release).
