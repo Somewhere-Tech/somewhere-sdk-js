@@ -6,6 +6,46 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## Unreleased — session status, and sign-in/sign-out that cannot land out of order
+
+Default-semantics changes (per the convention above this is a minor bump;
+the version is set at release).
+
+### Added
+- `auth.getState()` and the `onChange` argument report `status`:
+  `'checking'` (no answer yet; a cached user is unverified), `'authenticated'`,
+  `'signed-out'`, or `'indeterminate'` (the check failed on a network error, a
+  non-401 error status or an unreadable body; `user` is the last-known
+  identity, unverified), plus `error` (`SESSION_CHECK_FAILED`,
+  `SIGN_OUT_UNCONFIRMED`). `useAuthState()` in `@somewhere-tech/sdk/react`
+  returns the same plus `recheck()`.
+- `createSomewhereAuth({ mutationTimeoutMs })` bounds one queued sign-in or
+  sign-out call (default 30000 ms; `AUTH_TIMEOUT`).
+
+### Changed
+- A `/me` answer, a 401, or a header-mode token rotation that started before a
+  newer sign-in or `signOut()` no longer changes the user, session or status.
+  Before, a late answer could bring back a signed-out user, wipe or replace a
+  new sign-in, or clear it.
+- Sign-in, sign-up, magic-link verify, OAuth completions and `/logout` from one
+  client run in call order. A sign-in answered after a newer `signOut()` or
+  sign-in rejects with `AuthError` code `AUTH_SUPERSEDED` and changes nothing;
+  the queued logout still runs after it. `getUser()` waits for queued calls and
+  shares one `/me` per identity change.
+- A `/me` 200 without a readable `user` now leaves the last-known user with
+  status `'indeterminate'` instead of signing out. `{ user: null }` and 401 still
+  sign out.
+- `signOut()` still clears local state immediately and resolves; when the
+  server call fails it now says so (`error.code === 'SIGN_OUT_UNCONFIRMED'`)
+  instead of ignoring it. In cookie mode it also calls `/logout` when a sign-in
+  is still queued.
+- Another tab signing in as someone else sets `'checking'` and re-checks `/me`
+  instead of adopting that tab's cached user. Same-identity updates from other
+  tabs are ignored, and an unchanged cached user is not rewritten.
+
+Ordering covers one client instance. Other tabs, or a request the server
+processes late, can still change the shared cookies; the next check reports it.
+
 ## 0.10.0 (2026-09-26) — The packaged sign-in handler never returns tokens unless asked
 
 **Breaking (callers of `somewhereAuth` that read tokens from the response

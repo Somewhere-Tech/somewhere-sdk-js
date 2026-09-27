@@ -19,10 +19,12 @@ import {
   type SomewhereAuthOptions,
   type User,
   type Session,
+  type AuthState,
   type BillingPlan,
 } from './client.js';
 
 interface AuthContextValue {
+  state: AuthState;
   user: User | null;
   session: Session | null;
   /** True until the initial session check resolves — avoids a flash of the
@@ -42,10 +44,7 @@ export function SomewhereAuthProvider(props: {
 }) {
   // Create the client exactly once.
   const auth = useMemo(() => props.client ?? createSomewhereAuth(props.options), []); // eslint-disable-line react-hooks/exhaustive-deps
-  const [state, setState] = useState<{ user: User | null; session: Session | null }>({
-    user: auth.getCachedUser(),
-    session: auth.getSession(),
-  });
+  const [state, setState] = useState<AuthState>(() => auth.getState());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -56,8 +55,8 @@ export function SomewhereAuthProvider(props: {
   }, [auth]);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ user: state.user, session: state.session, loading, auth }),
-    [state.user, state.session, loading, auth],
+    () => ({ state, user: state.user, session: state.session, loading, auth }),
+    [state, loading, auth],
   );
   return <AuthContext.Provider value={value}>{props.children}</AuthContext.Provider>;
 }
@@ -66,6 +65,17 @@ function useAuthContext(): AuthContextValue {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error('@somewhere-tech/sdk/auth: hooks must be used inside <SomewhereAuthProvider>.');
   return ctx;
+}
+
+/**
+ * The session as the backend last reported it: status ('checking' |
+ * 'authenticated' | 'signed-out' | 'indeterminate'), the user (last-known and
+ * unverified unless 'authenticated'), and the check error. `recheck()` asks
+ * /me again. Unlike useUser(), this never presents a cached user as verified.
+ */
+export function useAuthState(): AuthState & { recheck(): Promise<User | null> } {
+  const { state, auth } = useAuthContext();
+  return useMemo(() => ({ ...state, recheck: auth.getUser }), [state, auth]);
 }
 
 /** The current user, or null. Re-renders on login/logout/rotation. */

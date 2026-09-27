@@ -37,6 +37,25 @@
  * EXISTING stored header session is adopted as-is (no forced re-auth) and
  * migrates to cookies transparently on the next login.
  *
+ * SESSION STATE AND ORDERING (tsk_166b8ddf): `getState()` and
+ * `onChange` report what the backend last said: 'checking' before any answer
+ * (a cached user is unverified), 'authenticated', 'signed-out', or
+ * 'indeterminate' when a check failed (network, 5xx, unreadable body) — the
+ * last-known user is kept but is not verified. Identity changes are ordered:
+ *
+ *   - Each sign-in/sign-up/completion and signOut() advances a generation when
+ *     it is CALLED. A /me answer, a 401, or a token rotation that started under
+ *     an earlier generation never writes user, session or status.
+ *   - Cookie-changing calls from one client (login, signup, magic-link verify,
+ *     OAuth completions, logout) run one at a time in call order, so their
+ *     Set-Cookie responses cannot land out of order. A sign-in answered after a
+ *     newer signOut()/sign-in rejects with code 'AUTH_SUPERSEDED' and changes
+ *     nothing locally; the queued logout still runs after it on the server.
+ *   - This orders one client instance only. Another tab, or a request the
+ *     server processes late, can still change the shared cookies; the next
+ *     check reports it. A timed-out call (mutationTimeoutMs) is abandoned
+ *     locally, but the server may still have acted on it.
+ *
  * The token trio originates from the app's own backend (login/signup are
  * developer-key-gated on the platform, so they can't be called from the
  * browser). Mount `somewhereAuth` from `@somewhere-tech/sdk/server` at
@@ -107,6 +126,26 @@ export interface BillingClient {
   openBillingPortal(opts?: { returnUrl?: string; redirect?: boolean }): Promise<{ url: string }>;
 }
 
+/**
+ * What this client last learned from the backend about the session.
+ *   checking       no answer yet since the client was created; `user` is cached, unverified
+ *   authenticated  the backend confirmed `user` (a sign-in response, or /me with a user)
+ *   signed-out     the backend confirmed no session (/me 401 or { user: null },
+ *                  a 401 on the current identity), or signOut() was called
+ *   indeterminate  the last check failed (network error, non-401 error status,
+ *                  unreadable body); `user` is the last-known identity, unverified
+ */
+export type AuthStatus = 'checking' | 'authenticated' | 'signed-out' | 'indeterminate';
+
+export interface AuthState {
+  status: AuthStatus;
+  user: User | null;
+  session: Session | null;
+  /** 'SESSION_CHECK_FAILED' in 'indeterminate'; 'SIGN_OUT_UNCONFIRMED' after a
+   *  signOut() whose server call failed (the server session may still exist). */
+  error: AuthError | null;
+}
+
 export interface StorageLike {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
@@ -133,6 +172,9 @@ export interface SomewhereAuthOptions {
   storageKey?: string;
   /** Session transport. Default: 'cookie' in browsers, 'header' elsewhere. */
   mode?: AuthMode;
+  /** How long one queued sign-in/sign-out call may take before it is
+   *  abandoned (AuthError 'AUTH_TIMEOUT') so later calls can run. Default 30000. */
+  mutationTimeoutMs?: number;
 }
 
 const ACCESS_ROTATE_HEADER = 'X-New-Access-Token';
@@ -192,8 +234,10 @@ export interface SomewhereAuth {
    *  use getCachedUser()/getUser() for signed-in state. */
   getSession(): Session | null;
   getCachedUser(): User | null;
-  /** Subscribe to session/user changes (login, logout, rotation). */
-  onChange(listener: (state: { user: User | null; session: Session | null }) => void): () => void;
+  /** Status, user, session and error as of now (no network). */
+  getState(): AuthState;
+  /** Subscribe to session/user/status changes (login, logout, rotation, checks). */
+  onChange(listener: (state: AuthState) => void): () => void;
   /** Entitlements (sw.billing) — `has(feature)` / `entitlements()` / `plans()`. */
   billing: BillingClient;
 }
@@ -231,7 +275,21 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   // transport) so the upgrade logs nobody out; it migrates to cookies on the
   // next sign-in.
   let user: User | null = session || preferCookie ? loadUser() : null;
-  const listeners = new Set<(s: { user: User | null; session: Session | null }) => void>();
+  // A cached user is unverified until the backend answers.
+  let status: AuthStatus = session || preferCookie ? 'checking' : 'signed-out';
+  let error: AuthError | null = null;
+  // Advances when an identity change is REQUESTED (sign-in family, signOut) or
+  // arrives from another tab. Responses to requests started under an earlier
+  // generation never write user, session or status.
+  let generation = 0;
+  // Cookie-changing calls run one at a time, in call order. The chain keeps
+  // going after a rejection; each call is bounded by mutationTimeoutMs.
+  let mutations: Promise<unknown> = Promise.resolve();
+  let pendingMutations = 0;
+  const mutationTimeoutMs = options.mutationTimeoutMs ?? 30_000;
+  // At most one /me per generation; concurrent getUser() calls share it.
+  let check: { generation: number; promise: Promise<User | null> } | null = null;
+  const listeners = new Set<(s: AuthState) => void>();
 
   function loadSession(): Session | null {
     try {
@@ -258,14 +316,18 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     }
   }
 
+  function snapshot(): AuthState {
+    return { status, user, session, error };
+  }
+
   function emit() {
-    const snapshot = { user, session };
-    for (const l of listeners) l(snapshot);
+    const state = snapshot();
+    for (const l of listeners) l(state);
   }
 
   /** ATOMIC: persist the whole session as one value, or clear it. There is no
    *  code path that writes one token without the other. */
-  function setSession(next: Session | null) {
+  function writeSession(next: Session | null) {
     session = next;
     try {
       if (next) storage.setItem(key, JSON.stringify(next));
@@ -273,36 +335,104 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     } catch {
       /* storage unavailable — keep the in-memory session anyway */
     }
-    emit();
   }
 
-  function setUser(next: User | null) {
+  function writeUser(next: User | null) {
     user = next;
     try {
-      if (next) storage.setItem(userKey, JSON.stringify(next));
-      else storage.removeItem(userKey);
+      const raw = next ? JSON.stringify(next) : null;
+      // Identical writes are skipped so other tabs only hear real changes.
+      if (storage.getItem(userKey) !== raw) {
+        if (raw === null) storage.removeItem(userKey);
+        else storage.setItem(userKey, raw);
+      }
     } catch {
       /* storage unavailable — keep the in-memory user anyway */
     }
+  }
+
+  function setSession(next: Session | null) {
+    writeSession(next);
     emit();
   }
 
+  /** The backend answered definitively. */
+  function settle(next: 'authenticated' | 'signed-out', nextUser: User | null) {
+    writeUser(nextUser);
+    status = next;
+    error = null;
+    emit();
+  }
+
+  /** A check failed without an answer: keep the last-known user, unverified. */
+  function indeterminate(httpStatus: number) {
+    status = 'indeterminate';
+    error = new AuthError(
+      httpStatus
+        ? `The session check failed (${httpStatus}); the sign-in state is unknown.`
+        : 'The session check could not reach the server; the sign-in state is unknown.',
+      httpStatus,
+      'SESSION_CHECK_FAILED',
+    );
+    emit();
+  }
+
+  function superseded(): AuthError {
+    return new AuthError('A newer sign-in or sign-out replaced this request.', 0, 'AUTH_SUPERSEDED');
+  }
+
+  /** Run a cookie-changing call after every earlier one has settled. */
+  function enqueue<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    pendingMutations++;
+    const run = mutations.then(async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), mutationTimeoutMs);
+      try {
+        return await task(controller.signal);
+      } catch (e) {
+        if (controller.signal.aborted) {
+          throw new AuthError('The auth request timed out; the server may still have completed it.', 0, 'AUTH_TIMEOUT');
+        }
+        throw e;
+      } finally {
+        clearTimeout(timer);
+        pendingMutations--;
+      }
+    });
+    mutations = run.catch(() => undefined);
+    return run;
+  }
+
   // Cross-tab sync: `storage` fires only in OTHER tabs/windows of the same
-  // origin — exactly the set whose in-memory session goes stale when this
-  // one rotates. Without it a background tab keeps riding its old refresh
-  // token; past the server's reuse-grace window that 401s and reads as a
-  // random logout (the multi-tab footgun this package exists to kill).
+  // origin. A rotated header pair for the same identity is adopted (the
+  // multi-tab refresh footgun this package exists to kill). A different
+  // identity is NOT trusted: status goes to 'checking' and /me re-checks.
   // key === null means storage.clear().
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
     window.addEventListener('storage', (e: StorageEvent) => {
       if (e.key !== null && e.key !== key && e.key !== userKey) return;
-      session = loadSession();
-      user = session || preferCookie ? loadUser() : null;
+      const nextSession = loadSession();
+      const nextUser = nextSession || preferCookie ? loadUser() : null;
+      const identityChanged = (nextUser?.id ?? null) !== (user?.id ?? null) || !nextSession !== !session;
+      if (!identityChanged) {
+        if (nextSession?.accessToken !== session?.accessToken || nextSession?.refreshToken !== session?.refreshToken) {
+          session = nextSession;
+          emit();
+        }
+        return;
+      }
+      generation++;
+      session = nextSession;
+      user = nextUser;
+      status = 'checking';
+      error = null;
       emit();
+      void getUser();
     });
   }
 
   const authFetch: typeof fetch = async (input, init = {}) => {
+    const started = generation;
     // Cookie path: no held tokens — the browser attaches the httpOnly pair
     // and the server refreshes it in-band (re-issued via Set-Cookie). Taken
     // only when no header session exists, so an adopted pre-0.2.0 session
@@ -313,8 +443,8 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       // NOT a 401.
       const res = await fetch(input, { credentials: 'include', ...init });
       // The server had the refresh cookie and still rejected: the session is
-      // genuinely dead. Anything else (5xx, blip) leaves the user cached.
-      if (res.status === 401 && user) setUser(null);
+      // genuinely dead — unless a newer sign-in/out happened meanwhile.
+      if (res.status === 401 && started === generation && status !== 'signed-out') settle('signed-out', null);
       return res;
     }
 
@@ -332,11 +462,12 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       return fetch(target, { ...init, headers });
     };
 
-    // Rotation: only when BOTH new tokens are present. Atomic swap.
+    // Rotation: only when BOTH new tokens are present, and only for the
+    // identity this request started under. Atomic swap.
     const applyRotation = (res: Response) => {
       const newAccess = res.headers.get(ACCESS_ROTATE_HEADER);
       const newRefresh = res.headers.get(REFRESH_ROTATE_HEADER);
-      if (newAccess && newRefresh) {
+      if (newAccess && newRefresh && started === generation) {
         setSession({ accessToken: newAccess, refreshToken: newRefresh });
       }
     };
@@ -346,9 +477,10 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     applyRotation(res);
 
     // 401 with a since-rotated pair: another tab may have refreshed while
-    // this request was in flight. Re-read storage; if a DIFFERENT session
-    // is there, retry ONCE with it before giving up.
-    if (res.status === 401 && used) {
+    // this request was in flight. Re-read storage; if a DIFFERENT pair for
+    // the SAME identity is there, retry ONCE with it. Never retry under a
+    // newer identity.
+    if (res.status === 401 && used && started === generation) {
       const stored = loadSession();
       if (stored && (stored.accessToken !== used.accessToken || stored.refreshToken !== used.refreshToken)) {
         setSession(stored);
@@ -359,11 +491,11 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
 
     // A 401 on the freshest pair means refresh already failed server-side
     // (it had the ride-along refresh token and still couldn't mint a
-    // session). The session is genuinely dead — clear it. Any other status
-    // leaves it intact.
-    if (res.status === 401 && session) {
-      setSession(null);
-      setUser(null);
+    // session). The session is genuinely dead — clear it, if it is still the
+    // identity this request started under. Any other status leaves it intact.
+    if (res.status === 401 && session && started === generation) {
+      writeSession(null);
+      settle('signed-out', null);
     }
 
     return res;
@@ -381,95 +513,130 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     return { access, refresh, user: d.user ?? null };
   }
 
-  async function postForSession(path: string, payload: unknown): Promise<User> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    // Header mode must ASK for tokens: a handler answers a request without
-    // the hint with a cookie session only (pfb_e1254f754222).
-    headers[MODE_HINT_HEADER] = preferCookie ? 'cookie' : 'header';
-    const res = await fetch(url(path), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload ?? {}),
-      ...(preferCookie ? { credentials: 'include' as RequestCredentials } : {}),
-    });
-    const body = (await res.json().catch(() => ({}))) as TokenResponse & { error?: string; message?: string };
-    if (!res.ok) {
-      throw new AuthError(body.message || body.error || `Request failed (${res.status})`, res.status);
-    }
-    // Cookie handshake confirmed: the backend set the httpOnly pair and the
-    // browser owns the session — no tokens in the body, nothing to store.
-    // This is also the transparent header→cookie migration point: any legacy
-    // localStorage pair from a pre-0.2.0 install is purged here.
-    const d = body.data ?? body;
-    if (preferCookie && (d.cookie_session === true || body.cookie_session === true)) {
-      if (session) setSession(null);
-      if (d.user) setUser(d.user);
-      else await getUser();
-      return user as User;
-    }
-    // Cookie mode was requested and the server did not confirm it: the
-    // handler omitted cookie mode (a pasted or pre-0.2.0 handler). Storing the
-    // tokens it returned would leave the session where page scripts can read
-    // it, so fail loudly and store nothing (pfb_961179f4970e).
-    if (preferCookie) {
-      throw new AuthError(
-        `Sign-in reached ${url(path)} but the server did not confirm a cookie session, so nothing was stored. ` +
-          `The handler there does not support cookie mode: mount the SDK's handler ` +
-          `(export { somewhereAuth as default } from '@somewhere-tech/sdk/server'), or make yours set the ` +
-          `session cookies and reply { user, cookie_session: true } when the request has X-Sw-Auth-Mode: cookie.`,
-        res.status,
-        'COOKIE_SESSION_NOT_CONFIRMED',
-      );
-    }
-    // Header mode (explicit, or the non-browser default): the caller asked
-    // for tokens in storage.
-    const tokens = pickTokens(body);
-    if (!tokens) throw new AuthError('Auth response did not include a session.', res.status);
-    setSession({ accessToken: tokens.access, refreshToken: tokens.refresh });
-    if (tokens.user) setUser(tokens.user);
-    else await getUser();
-    return user as User;
+  /** Reads `{ user }` / `{ data: { user } }`. undefined = unreadable answer. */
+  function readUser(body: unknown): User | null | undefined {
+    if (!body || typeof body !== 'object') return undefined;
+    const b = body as { user?: unknown; data?: { user?: unknown } };
+    const value = 'user' in b ? b.user : b.data && typeof b.data === 'object' && 'user' in b.data ? b.data.user : undefined;
+    if (value === null) return null;
+    if (value && typeof value === 'object' && typeof (value as User).id === 'string') return value as User;
+    return undefined;
   }
 
-  async function getUser(): Promise<User | null> {
-    if (!session && preferCookie) {
-      // Cookie mode: the browser owns the session, so always probe /me with
-      // credentials — even with no cached user (the cookie can outlive a
-      // cleared cache). 401 or an explicit { user: null } is DEFINITIVE
-      // signed-out; a blip or 5xx keeps the cached user (never logout on a
-      // network error).
-      try {
-        const res = await fetch(url('/me'), { method: 'GET', credentials: 'include' });
-        if (res.status === 401) {
-          if (user) setUser(null);
-          return null;
-        }
-        if (!res.ok) return user; // transient — keep cached user
-        const body = (await res.json().catch(() => ({}))) as { user?: User; data?: { user?: User } };
-        const u = body.user ?? body.data?.user ?? null;
-        setUser(u);
-        return u;
-      } catch {
-        // network blip — keep whatever we had
-        return user;
+  function postForSession(path: string, payload: unknown): Promise<User> {
+    // Intent: from this call on, earlier checks and updates no longer apply.
+    const mine = ++generation;
+    return enqueue(async (signal) => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      // Header mode must ASK for tokens: a handler answers a request without
+      // the hint with a cookie session only (pfb_e1254f754222).
+      headers[MODE_HINT_HEADER] = preferCookie ? 'cookie' : 'header';
+      const res = await fetch(url(path), {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload ?? {}),
+        signal,
+        ...(preferCookie ? { credentials: 'include' as RequestCredentials } : {}),
+      });
+      const body = (await res.json().catch(() => ({}))) as TokenResponse & { error?: string; message?: string };
+      if (!res.ok) {
+        // Nothing changed server-side. If this call invalidated the first
+        // check, ask again so the state does not stay 'checking'.
+        if (generation === mine && status === 'checking') void getUser();
+        throw new AuthError(body.message || body.error || `Request failed (${res.status})`, res.status);
       }
-    }
-    if (!session) {
-      setUser(null);
+      if (generation !== mine) throw superseded();
+      // Cookie handshake confirmed: the backend set the httpOnly pair and the
+      // browser owns the session — no tokens in the body, nothing to store.
+      // This is also the transparent header→cookie migration point: any legacy
+      // localStorage pair from a pre-0.2.0 install is purged here.
+      const d = body.data ?? body;
+      if (preferCookie && (d.cookie_session === true || body.cookie_session === true)) {
+        if (session) writeSession(null);
+        if (d.user) settle('authenticated', d.user);
+        else await checkNow(mine);
+        if (generation !== mine) throw superseded();
+        return user as User;
+      }
+      // Cookie mode was requested and the server did not confirm it: the
+      // handler omitted cookie mode (a pasted or pre-0.2.0 handler). Storing the
+      // tokens it returned would leave the session where page scripts can read
+      // it, so fail loudly and store nothing (pfb_961179f4970e).
+      if (preferCookie) {
+        throw new AuthError(
+          `Sign-in reached ${url(path)} but the server did not confirm a cookie session, so nothing was stored. ` +
+            `The handler there does not support cookie mode: mount the SDK's handler ` +
+            `(export { somewhereAuth as default } from '@somewhere-tech/sdk/server'), or make yours set the ` +
+            `session cookies and reply { user, cookie_session: true } when the request has X-Sw-Auth-Mode: cookie.`,
+          res.status,
+          'COOKIE_SESSION_NOT_CONFIRMED',
+        );
+      }
+      // Header mode (explicit, or the non-browser default): the caller asked
+      // for tokens in storage.
+      const tokens = pickTokens(body);
+      if (!tokens) throw new AuthError('Auth response did not include a session.', res.status);
+      writeSession({ accessToken: tokens.access, refreshToken: tokens.refresh });
+      if (tokens.user) settle('authenticated', tokens.user);
+      else await checkNow(mine);
+      if (generation !== mine) throw superseded();
+      return user as User;
+    });
+  }
+
+  /** One /me round-trip. Writes state only if `started` is still current. */
+  async function checkNow(started: number): Promise<User | null> {
+    const cookie = !session && preferCookie;
+    if (!cookie && !session) {
+      if (started === generation) settle('signed-out', null);
       return null;
     }
+    let res: Response;
     try {
-      const res = await authFetch(url('/me'), { method: 'GET' });
-      if (res.status === 401) return null; // authFetch already cleared
-      if (!res.ok) return user; // transient — keep cached user
-      const body = (await res.json().catch(() => ({}))) as { user?: User; data?: { user?: User } };
-      const u = body.user ?? body.data?.user ?? null;
-      setUser(u);
-      return u;
+      // Cookie mode: the browser owns the session, so always probe /me with
+      // credentials — even with no cached user (the cookie can outlive a
+      // cleared cache). Header mode rides authFetch (refresh + rotation).
+      res = cookie
+        ? await fetch(url('/me'), { method: 'GET', credentials: 'include' })
+        : await authFetch(url('/me'), { method: 'GET' });
     } catch {
-      // network blip — keep whatever we had
+      // Network blip: never a logout. Keep the last-known user, unverified.
+      if (started === generation) indeterminate(0);
       return user;
     }
+    if (started !== generation) return user;
+    // 401 or an explicit { user: null } is DEFINITIVE signed-out.
+    if (res.status === 401) {
+      settle('signed-out', null);
+      return null;
+    }
+    if (!res.ok) {
+      indeterminate(res.status);
+      return user;
+    }
+    const body: unknown = await res.json().catch(() => undefined);
+    if (started !== generation) return user;
+    const u = readUser(body);
+    if (u === undefined) {
+      indeterminate(res.status);
+      return user;
+    }
+    settle(u ? 'authenticated' : 'signed-out', u);
+    return u;
+  }
+
+  /** Validate the session against /me. Runs after queued sign-ins/outs and is
+   *  shared by concurrent callers within one generation. */
+  function getUser(): Promise<User | null> {
+    if (check && check.generation === generation) return check.promise;
+    const started = generation;
+    const promise: Promise<User | null> = mutations
+      .then(() => checkNow(started))
+      .finally(() => {
+        if (check?.promise === promise) check = null;
+      });
+    check = { generation: started, promise };
+    return promise;
   }
 
   return {
@@ -512,34 +679,49 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       return u;
     },
     completeDiscordSignIn: (i) => postForSession('/discord', { code: i.code }),
-    signOut: async () => {
+    signOut: () => {
       const had = session;
-      const hadUser = user;
-      setSession(null);
-      setUser(null);
-      if (had || (preferCookie && hadUser)) {
-        // Best-effort server-side revoke (and, in cookie mode, the Set-Cookie
-        // expirations that actually end the browser session); never block
-        // logout on the network — local state is already cleared.
+      // Something to end server-side: a header session, a known or pending
+      // cookie identity, or a sign-in still queued ahead of this call.
+      const serverWork = !!had || (preferCookie && (!!user || status !== 'signed-out' || pendingMutations > 0));
+      // Local state is cleared NOW; earlier checks, 401s, rotations and
+      // queued sign-ins can no longer restore an identity.
+      const mine = ++generation;
+      writeSession(null);
+      settle('signed-out', null);
+      if (!serverWork) return Promise.resolve();
+      // Server-side revoke (and, in cookie mode, the Set-Cookie expirations
+      // that actually end the browser session), after every earlier queued
+      // call. Resolves either way; a failure is reported as
+      // error.code 'SIGN_OUT_UNCONFIRMED', because the server session may still exist.
+      return enqueue(async (signal) => {
+        let failure: AuthError | null = null;
         try {
-          await fetch(url('/logout'), {
+          const res = await fetch(url('/logout'), {
             method: 'POST',
             headers: had
               ? { 'Content-Type': 'application/json', Authorization: `Bearer ${had.accessToken}` }
               : { 'Content-Type': 'application/json' },
+            signal,
             ...(preferCookie ? { credentials: 'include' as RequestCredentials } : {}),
           });
+          if (!res.ok) failure = new AuthError(`The server did not confirm sign-out (${res.status}).`, res.status, 'SIGN_OUT_UNCONFIRMED');
         } catch {
-          /* ignore */
+          failure = new AuthError('Sign-out could not reach the server; the session may still be active.', 0, 'SIGN_OUT_UNCONFIRMED');
         }
-      }
+        if (failure && generation === mine) {
+          error = failure;
+          emit();
+        }
+      });
     },
     getUser,
     getSession: () => session,
     getCachedUser: () => user,
+    getState: snapshot,
     onChange: (listener) => {
       listeners.add(listener);
-      listener({ user, session });
+      listener(snapshot());
       return () => void listeners.delete(listener);
     },
     billing: {
