@@ -134,8 +134,10 @@ export interface BillingClient {
  * What this client last learned from the backend about the session.
  *   checking       no answer yet since the client was created; `user` is cached, unverified
  *   authenticated  the backend confirmed `user` (a sign-in response, or /me with a user)
- *   signed-out     the backend confirmed no session (/me 401 or { user: null },
- *                  a 401 on the current identity), or signOut() was called
+ *   signed-out     no identity in this client: the backend confirmed no session
+ *                  (/me 401 or { user: null }, a 401 on the current identity), or
+ *                  signOut() cleared it. While `signingOut` is true the server
+ *                  has not answered /logout yet; `signOutUnconfirmed` means it failed.
  *   indeterminate  the last check failed (network error, non-401 error status,
  *                  unreadable body); `user` is the last-known identity, unverified
  */
@@ -152,6 +154,10 @@ export interface AuthState {
    *  still exist. Cleared when a later signOut() reaches the server, /me
    *  answers definitively, or a sign-in replaces the session. */
   signOutUnconfirmed: boolean;
+  /** True from a signOut() call until its /logout is answered (or fails or
+   *  times out). `user` is already null, but the server session may still be
+   *  active: show a pending state, not a signed-out one, until this is false. */
+  signingOut: boolean;
 }
 
 export interface StorageLike {
@@ -310,6 +316,8 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   // header session it was for, until /logout succeeds, /me answers
   // definitively, or a sign-in replaces the session.
   let owedSignOut: { session: Session | null; error: AuthError } | null = null;
+  // signOut() calls whose /logout has not settled yet (AuthState.signingOut).
+  let signOutsInFlight = 0;
   // At most one /me per generation; concurrent getUser() calls share it.
   let check: { generation: number; promise: Promise<User | null> } | null = null;
   const listeners = new Set<(s: AuthState) => void>();
@@ -340,7 +348,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   }
 
   function snapshot(): AuthState {
-    return { status, user, session, error, signOutUnconfirmed: owedSignOut !== null };
+    return { status, user, session, error, signOutUnconfirmed: owedSignOut !== null, signingOut: signOutsInFlight > 0 };
   }
 
   function emit() {
@@ -736,6 +744,9 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       // is not a server sign-out: that is only confirmed by /logout below.
       const mine = ++generation;
       writeSession(null);
+      // Pending until /logout is answered: consumers show "signing out", not
+      // "signed out", while the server may still accept the session.
+      if (serverWork) signOutsInFlight++;
       settle('signed-out', null);
       if (!serverWork) return Promise.resolve();
       const unconfirmed = (failure: AuthError) => {
@@ -776,6 +787,9 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       }).catch(() => {
         // Only the deadline rejects here.
         unconfirmed(new AuthError('Sign-out timed out; the session may still be active.', 0, 'SIGN_OUT_UNCONFIRMED'));
+      }).finally(() => {
+        signOutsInFlight--;
+        emit();
       });
     },
     getUser,

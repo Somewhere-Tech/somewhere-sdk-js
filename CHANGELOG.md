@@ -6,6 +6,21 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## Unreleased — a sign-out is pending until the server answers
+
+### Added
+- `AuthState.signingOut` (and `useAuthState().signingOut`): true from a
+  `signOut()` call until its `/logout` is answered, fails, or times out.
+  `user` is still cleared at once, but until the server answers it may still
+  accept the session. Show a pending state while this is true; show signed out
+  only when it is false and `signOutUnconfirmed` is false.
+
+### Changed
+- The `'signed-out'` status documentation now says what it always meant: no
+  identity in this client, either confirmed by the backend or cleared by
+  `signOut()`. `signingOut` and `signOutUnconfirmed` say whether the server has
+  confirmed it. Existing behaviour is unchanged.
+
 ## 0.11.0 (2026-09-27) — session status, and sign-in/sign-out that cannot land out of order
 
 Default-semantics changes (per the convention above this is a minor bump;

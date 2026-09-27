@@ -540,5 +540,73 @@ for (const [label, respond, expect] of [
   check('a stale sign-in failure after signOut() changes nothing', auth.getState().status === 'signed-out' && meCalls === 0, { status: auth.getState().status, meCalls });
 }
 
+// ------------------------------------- sign-out pending until the server answers
+
+{ // Delayed /logout: identity cleared at once, pending until the answer.
+  browser({ cachedUser: A });
+  const logout = deferred();
+  server({ '/api/auth/logout': () => logout.promise });
+  const auth = createSomewhereAuth();
+  const seen = [];
+  auth.onChange((s) => seen.push(`${s.status}:${s.signingOut}`));
+  const done = auth.signOut();
+  let s = auth.getState();
+  check('signOut(): user cleared immediately, signingOut true while /logout is pending',
+    s.user === null && s.status === 'signed-out' && s.signingOut === true && s.signOutUnconfirmed === false, s);
+  await tick(); await tick();
+  check('…still pending before the server answers', auth.getState().signingOut === true);
+  logout.resolve(json(200, { ok: true }));
+  await done;
+  s = auth.getState();
+  check('…signingOut false once /logout is answered (confirmed, no error)', s.signingOut === false && s.signOutUnconfirmed === false && s.error === null, s);
+  check('…onChange reported pending, then confirmed', seen.includes('signed-out:true') && seen.at(-1) === 'signed-out:false', seen);
+}
+for (const [label, respond, opts] of [
+  ['500', () => json(500, {}), {}],
+  ['network error', () => { throw new TypeError('offline'); }, {}],
+  ['timeout', (init) => hang(init), { mutationTimeoutMs: 30 }],
+]) {
+  browser({ cachedUser: A });
+  server({ '/api/auth/logout': respond });
+  const auth = createSomewhereAuth(opts);
+  await auth.signOut();
+  const s = auth.getState();
+  check(`/logout ${label}: pending ends, sign-out reported unconfirmed (not claimed)`, s.signingOut === false && s.signOutUnconfirmed === true && s.error?.code === 'SIGN_OUT_UNCONFIRMED', s);
+}
+{
+  browser();
+  server({ '/api/auth/me': () => json(401, {}) });
+  const auth = createSomewhereAuth();
+  await auth.getUser();
+  auth.signOut();
+  check('control: no server work → never pending', auth.getState().signingOut === false);
+}
+{ // Two overlapping sign-outs: pending until both are answered.
+  browser({ cachedUser: A });
+  const first = deferred();
+  let n = 0;
+  server({ '/api/auth/logout': () => (++n === 1 ? json(500, {}) : first.promise) });
+  const auth = createSomewhereAuth();
+  const a = auth.signOut();
+  const b = auth.signOut(); // owed after a's failure → retried
+  await a;
+  check('overlapping sign-outs: still pending while the second /logout is open', auth.getState().signingOut === true);
+  first.resolve(json(200, {}));
+  await b;
+  check('…then confirmed', auth.getState().signingOut === false && auth.getState().signOutUnconfirmed === false);
+}
+{ // A sign-in queued after a pending sign-out stands once both finish.
+  browser({ cachedUser: A });
+  const logout = deferred();
+  server({ '/api/auth/logout': () => logout.promise, '/api/auth/login': () => json(200, { user: B, cookie_session: true }) });
+  const auth = createSomewhereAuth();
+  const out = auth.signOut();
+  const signIn = auth.signIn({ email: B.email, password: 'pw' });
+  logout.resolve(json(200, {}));
+  await out; await signIn;
+  const s = auth.getState();
+  check('sign-in after a pending sign-out: authenticated, not pending', s.status === 'authenticated' && s.user?.id === 'usr_b' && s.signingOut === false, s);
+}
+
 console.log(failed ? `\n${failed} failed` : '\nall passed');
 process.exit(failed ? 1 : 0);
