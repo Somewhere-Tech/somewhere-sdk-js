@@ -17,10 +17,12 @@ the version is set at release).
   `'signed-out'`, or `'indeterminate'` (the check failed on a network error, a
   non-401 error status or an unreadable body; `user` is the last-known
   identity, unverified), plus `error` (`SESSION_CHECK_FAILED`,
-  `SIGN_OUT_UNCONFIRMED`). `useAuthState()` in `@somewhere-tech/sdk/react`
-  returns the same plus `recheck()`.
+  `SIGN_OUT_UNCONFIRMED`) and `signOutUnconfirmed`. `useAuthState()` in
+  `@somewhere-tech/sdk/react` returns the same plus `recheck()`.
 - `createSomewhereAuth({ mutationTimeoutMs })` bounds one queued sign-in or
-  sign-out call (default 30000 ms; `AUTH_TIMEOUT`).
+  sign-out call, including reading the response and any follow-up `/me`
+  (default 30000 ms; `AUTH_TIMEOUT`). Values outside 1–2147483647 ms throw
+  `RangeError`.
 
 ### Changed
 - A `/me` answer, a 401, or a header-mode token rotation that started before a
@@ -35,10 +37,16 @@ the version is set at release).
 - A `/me` 200 without a readable `user` now leaves the last-known user with
   status `'indeterminate'` instead of signing out. `{ user: null }` and 401 still
   sign out.
-- `signOut()` still clears local state immediately and resolves; when the
-  server call fails it now says so (`error.code === 'SIGN_OUT_UNCONFIRMED'`)
-  instead of ignoring it. In cookie mode it also calls `/logout` when a sign-in
-  is still queued.
+- `signOut()` still clears local state immediately and resolves. Clearing
+  local state is not reported as a server sign-out: when `/logout` fails, times
+  out or is refused, `signOutUnconfirmed` is true and `error.code` is
+  `'SIGN_OUT_UNCONFIRMED'` until a later `signOut()` reaches the server (it
+  retries, with the header session it was for), `/me` answers definitively,
+  or a sign-in replaces the session. In cookie mode it also calls `/logout`
+  when a sign-in is still queued.
+- A sign-in that fails (refused, network, timeout) after it invalidated the
+  first check re-checks `/me`, so the status does not stay `'checking'`. A
+  failure that lands after a newer sign-in or sign-out changes nothing.
 - Another tab signing in as someone else sets `'checking'` and re-checks `/me`
   instead of adopting that tab's cached user. Same-identity updates from other
   tabs are ignored, and an unchanged cached user is not rewritten.

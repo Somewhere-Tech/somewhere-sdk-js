@@ -379,5 +379,166 @@ for (const [label, respond, status] of [['500', () => json(500, {}), 500], ['net
   check('header control: same identity 401 retries once with the freshest pair, then clears', retried.join() === 'Bearer accC,Bearer accOther' && auth.getSession() === null && auth.getState().status === 'signed-out', retried);
 }
 
+// ------------------------------------------ owed sign-out (root blocker 1)
+
+{ // Failure -> retry reaches the server again -> confirmed; then no more calls.
+  browser({ cachedUser: A });
+  let n = 0;
+  const calls = server({ '/api/auth/logout': () => (++n === 1 ? json(500, {}) : json(200, { ok: true })) });
+  const auth = createSomewhereAuth();
+  await auth.signOut();
+  let s = auth.getState();
+  check('failed /logout: signOutUnconfirmed + SIGN_OUT_UNCONFIRMED, locally signed out',
+    s.signOutUnconfirmed === true && s.error?.code === 'SIGN_OUT_UNCONFIRMED' && s.status === 'signed-out' && s.user === null, s);
+  await auth.signOut();
+  s = auth.getState();
+  check('signOut() again retries /logout on the server', calls.filter((c) => c.path === '/api/auth/logout').length === 2);
+  check('…and a confirmed /logout clears the obligation and the error', s.signOutUnconfirmed === false && s.error === null, s);
+  await auth.signOut();
+  check('control: once confirmed, signOut() makes no further request', calls.filter((c) => c.path === '/api/auth/logout').length === 2);
+}
+{ // Two failures stay owed; local settles do not clear it.
+  browser({ cachedUser: A });
+  server({ '/api/auth/logout': () => { throw new TypeError('offline'); } });
+  const auth = createSomewhereAuth();
+  await auth.signOut();
+  await auth.signOut();
+  check('repeated failures stay owed', auth.getState().signOutUnconfirmed === true);
+}
+{ // Header mode: the retry carries the token of the session being signed out.
+  delete globalThis.document;
+  const values = new Map([['sw_auth', JSON.stringify({ accessToken: 'accA', refreshToken: 'refA' })]]);
+  const storage = { getItem: (k) => values.get(k) ?? null, setItem: (k, v) => values.set(k, v), removeItem: (k) => values.delete(k) };
+  const sent = [];
+  let n = 0;
+  server({ '/api/auth/logout': (init) => { sent.push(new Headers(init.headers).get('Authorization')); return ++n === 1 ? json(503, {}) : json(200, {}); } });
+  const auth = createSomewhereAuth({ mode: 'header', storage });
+  await auth.signOut();
+  await auth.getUser(); // local answer only (no session): must not clear the obligation
+  check('header: a local "no session" answer does not confirm an owed sign-out', auth.getState().signOutUnconfirmed === true);
+  await auth.signOut();
+  check('header: the retry sends the original session token', sent.join() === 'Bearer accA,Bearer accA' && auth.getState().signOutUnconfirmed === false, sent);
+}
+for (const [label, respond, expect] of [
+  ['/me 401', () => json(401, {}), { status: 'signed-out', owed: false }],
+  ['/me with a user', () => json(200, { user: A }), { status: 'authenticated', owed: false }],
+  ['/me 503', () => json(503, {}), { status: 'indeterminate', owed: true }],
+]) {
+  browser({ cachedUser: A });
+  server({ '/api/auth/logout': () => json(500, {}), '/api/auth/me': respond });
+  const auth = createSomewhereAuth();
+  await auth.signOut();
+  await auth.getUser();
+  const s = auth.getState();
+  check(`cookie: after a failed sign-out, ${label} → ${expect.status}, owed=${expect.owed}`, s.status === expect.status && s.signOutUnconfirmed === expect.owed, s);
+}
+{
+  browser({ cachedUser: A });
+  server({ '/api/auth/logout': () => json(500, {}), '/api/auth/login': () => json(200, { user: B, cookie_session: true }) });
+  const auth = createSomewhereAuth();
+  await auth.signOut();
+  await auth.signIn({ email: B.email, password: 'pw' });
+  check('a sign-in replaces the owed session (obligation cleared)', auth.getState().signOutUnconfirmed === false && auth.getState().error === null);
+}
+{ // A hung /logout: signOut() still resolves, and the obligation is recorded.
+  browser({ cachedUser: A });
+  server({ '/api/auth/logout': (init) => hang(init), '/api/auth/login': () => json(200, { user: B, cookie_session: true }) });
+  const auth = createSomewhereAuth({ mutationTimeoutMs: 30 });
+  const result = await settled(auth.signOut());
+  check('a timed-out /logout resolves and stays owed', !result.error && auth.getState().signOutUnconfirmed === true, auth.getState());
+  const next = await settled(auth.signIn({ email: B.email, password: 'pw' }));
+  check('…and the queue moves on', next.value?.id === 'usr_b');
+}
+
+// -------------------------------------- deadline covers the whole call (blocker 2)
+
+{ // Cookie handshake without a user; the fallback /me never answers.
+  browser();
+  const calls = server({
+    '/api/auth/login': () => json(200, { cookie_session: true }),
+    '/api/auth/me': (init) => hang(init),
+    '/api/auth/logout': () => json(200, { ok: true }),
+  });
+  const auth = createSomewhereAuth({ mutationTimeoutMs: 30 });
+  const signIn = settled(auth.signIn({ email: B.email, password: 'pw' }));
+  while (!calls.some((c) => c.path === '/api/auth/me')) await tick(); // the fallback is in flight
+  const signOut = auth.signOut();
+  const result = await signIn;
+  await signOut;
+  check('a hung fallback /me times the sign-in out (AUTH_TIMEOUT)', result.error?.code === 'AUTH_TIMEOUT', result);
+  check('…the fallback /me received the deadline signal', calls.find((c) => c.path === '/api/auth/me')?.init.signal?.aborted === true);
+  check('…and the queued signOut still reaches /logout', calls.some((c) => c.path === '/api/auth/logout'));
+}
+{ // The fallback /me answers AFTER the deadline: it writes nothing.
+  browser();
+  const late = deferred();
+  let meCalls = 0;
+  server({
+    '/api/auth/login': () => json(200, { cookie_session: true }),
+    '/api/auth/me': () => (++meCalls === 1 ? late.promise : json(401, {})),
+  });
+  const auth = createSomewhereAuth({ mutationTimeoutMs: 30 });
+  const result = await settled(auth.signIn({ email: B.email, password: 'pw' }));
+  for (let i = 0; i < 10 && auth.getState().status === 'checking'; i++) await tick();
+  const before = auth.getState().status;
+  late.resolve(json(200, { user: B }));
+  await tick(); await tick();
+  check('timed-out sign-in re-checks /me so the state leaves "checking"', result.error?.code === 'AUTH_TIMEOUT' && before === 'signed-out' && meCalls === 2, { before, meCalls });
+  check('a fallback /me answered after the deadline does not sign in', auth.getState().status === 'signed-out' && auth.getCachedUser() === null);
+}
+{ // A login body that never finishes is bounded too.
+  browser();
+  const calls = server({
+    '/api/auth/login': () => new Response(new ReadableStream({ start() {} }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    '/api/auth/logout': () => json(200, { ok: true }),
+    '/api/auth/me': () => json(401, {}),
+  });
+  const auth = createSomewhereAuth({ mutationTimeoutMs: 30 });
+  const signIn = settled(auth.signIn({ email: B.email, password: 'pw' }));
+  const signOut = auth.signOut();
+  const result = await signIn;
+  await signOut;
+  check('a never-ending response body times out', result.error?.code === 'AUTH_TIMEOUT', result);
+  check('…and the queued signOut still reaches /logout', calls.some((c) => c.path === '/api/auth/logout'));
+}
+{
+  browser();
+  const bad = [0, -1, NaN, Infinity, 2 ** 31, '30000', null];
+  const threw = bad.filter((value) => { try { createSomewhereAuth({ mutationTimeoutMs: value }); return false; } catch (e) { return e instanceof RangeError; } });
+  check('invalid mutationTimeoutMs values throw RangeError', threw.length === bad.length, { threw: threw.map(String) });
+  let ok = true;
+  for (const value of [1, 2_147_483_647, undefined]) { try { createSomewhereAuth({ mutationTimeoutMs: value }); } catch { ok = false; } }
+  check('control: 1, 2147483647 and the default are accepted', ok);
+}
+
+// --------------------------------- current vs stale sign-in network failures
+
+{ // Current generation: a network failure leaves 'checking' via a truthful /me.
+  browser();
+  let meCalls = 0;
+  server({ '/api/auth/login': () => { throw new TypeError('offline'); }, '/api/auth/me': () => { meCalls++; return json(401, {}); } });
+  const auth = createSomewhereAuth();
+  const result = await settled(auth.signIn({ email: B.email, password: 'pw' }));
+  for (let i = 0; i < 10 && auth.getState().status === 'checking'; i++) await tick();
+  check('a sign-in network failure while checking re-checks /me (→ signed-out)', result.error instanceof TypeError && auth.getState().status === 'signed-out' && meCalls === 1, auth.getState());
+}
+{ // Stale: the failure lands after a newer signOut; nothing is re-checked or changed.
+  browser({ cachedUser: A });
+  const login = deferred();
+  let meCalls = 0;
+  server({
+    '/api/auth/login': () => login.promise,
+    '/api/auth/logout': () => json(200, { ok: true }),
+    '/api/auth/me': () => { meCalls++; return json(200, { user: A }); },
+  });
+  const auth = createSomewhereAuth();
+  const signIn = settled(auth.signIn({ email: B.email, password: 'pw' }));
+  await tick();
+  const signOut = auth.signOut();
+  login.resolve(Promise.reject(new TypeError('offline')));
+  await signIn; await signOut; await tick();
+  check('a stale sign-in failure after signOut() changes nothing', auth.getState().status === 'signed-out' && meCalls === 0, { status: auth.getState().status, meCalls });
+}
+
 console.log(failed ? `\n${failed} failed` : '\nall passed');
 process.exit(failed ? 1 : 0);
