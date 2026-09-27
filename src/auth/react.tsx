@@ -104,17 +104,26 @@ export function SignedIn({ children }: { children: React.ReactNode }) {
   return user ? <>{children}</> : null;
 }
 
-export function SignedOut({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuthContext();
+/**
+ * Renders `children` when signed out. While a signOut() is waiting for the
+ * server (`useAuthState().signingOut`), the server may still accept the
+ * session, so it renders `pending` instead (default nothing), e.g.
+ * `<SignedOut pending={<p>Signing out…</p>}><SignIn/></SignedOut>`.
+ */
+export function SignedOut({ children, pending = null }: { children: React.ReactNode; pending?: React.ReactNode }) {
+  const { user, loading, state } = useAuthContext();
   if (loading && !user) return null; // cached user paints now; /me verifies in the background (tsk_1288e1c6)
-  return user ? null : <>{children}</>;
+  if (user) return null;
+  return state.signingOut ? <>{pending}</> : <>{children}</>;
 }
 
-/** Gate a subtree behind auth; shows `fallback` (default null) when signed out. */
-export function Protect({ children, fallback = null }: { children: React.ReactNode; fallback?: React.ReactNode }) {
-  const { user, loading } = useAuthContext();
+/** Gate a subtree behind auth; shows `fallback` (default null) when signed
+ *  out, and `pending` (default null) while a signOut() awaits the server. */
+export function Protect({ children, fallback = null, pending = null }: { children: React.ReactNode; fallback?: React.ReactNode; pending?: React.ReactNode }) {
+  const { user, loading, state } = useAuthContext();
   if (loading && !user) return null; // cached user paints now; /me verifies in the background (tsk_1288e1c6)
-  return user ? <>{children}</> : <>{fallback}</>;
+  if (user) return <>{children}</>;
+  return state.signingOut ? <>{pending}</> : <>{fallback}</>;
 }
 
 function userEntitlements(user: User | null): string[] {

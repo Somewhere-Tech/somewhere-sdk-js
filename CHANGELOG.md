@@ -14,8 +14,15 @@ last feature/breaking bump), the **minor** version is the breaking lever until
   `user` is still cleared at once, but until the server answers it may still
   accept the session. Show a pending state while this is true; show signed out
   only when it is false and `signOutUnconfirmed` is false.
+- `<SignedOut pending={…}>` and `<Protect pending={…}>`: while a sign-out
+  awaits the server they render `pending` (default nothing) instead of their
+  signed-out children / `fallback`.
 
 ### Changed
+- `<SignedOut>` no longer renders its children, and `<Protect>` no longer
+  renders its `fallback`, between a `signOut()` call and the server's answer.
+  Before, a sign-in form inside `<SignedOut>` appeared while the server could
+  still accept the session. `<SignedIn>` is unchanged (it hides at once).
 - The `'signed-out'` status documentation now says what it always meant: no
   identity in this client, either confirmed by the backend or cleared by
   `signOut()`. `signingOut` and `signOutUnconfirmed` say whether the server has
