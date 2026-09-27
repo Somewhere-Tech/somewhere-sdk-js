@@ -6,7 +6,7 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
-## Unreleased — a sign-out is pending until the server answers
+## 0.11.1 (2026-09-27) — a sign-out is pending until the server answers
 
 ### Added
 - `AuthState.signingOut` (and `useAuthState().signingOut`): true from a
