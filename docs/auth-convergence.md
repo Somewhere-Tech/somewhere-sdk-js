@@ -1,17 +1,18 @@
 # Authentication convergence
 
-Decision: 2026-07-28 (`tsk_acd56ee8`).
+Decision record: 2026-07-28 (`tsk_acd56ee8`). For current application setup,
+start with the [SDK README](../README.md).
 
 ## Only-path contract
 
 | Environment | Session transport | Browser credentials | Data access |
 |---|---|---:|---|
-| Browser app | Same-origin `/api/auth` handler backed by `sw.auth.*WithCookie` / `fromRequest`; `HttpOnly` cookie session | Zero | Same-origin server functions using `sw.db` / `sw.fs` |
+| Browser app | Same-origin `/api/auth` handler backed by `sw.auth.*WithCookie` / `fromRequest`; `HttpOnly` cookie session | Zero | Schema-generated `somewhere:data` and `somewhere:files` for declared operations; same-origin server functions for trusted logic using `sw.db` / `sw.fs` |
 | Script, agent, CLI, server, native app | `Authorization: Bearer` plus explicit refresh rotation | Not applicable | SDK/platform API as allowed by the credential |
 
 Founder ruling, 2026-07-28: one package. `@somewhere-tech/sdk` owns the
 cookie-native client, server handler, React providers/hooks/gates, and the
-Supabase-shaped compatibility client. The focused entry points are
+explicit platform client with its established fluent query builder. The focused entry points are
 `@somewhere-tech/sdk/auth`, `@somewhere-tech/sdk/server`, and
 `@somewhere-tech/sdk/react`. `@somewhere-tech/auth` is a thin re-export shim;
 standalone-package deprecation is deferred until usage proves safe.
@@ -37,11 +38,16 @@ standalone-package deprecation is deferred until usage proves safe.
 - Existing `signInWithPassword` remains; `signIn` is additive.
 - Existing password-reset `verifyOtp` remains and warns through types/docs by
   being marked deprecated; `verifyPasswordReset` is the clear additive name.
-- Direct browser database/files calls still execute, but warn once per surface
-  and point to same-origin server functions. `functions.invoke` does not warn.
+- The root client retains direct database/files methods for explicit
+  server/non-browser integrations. A cookie-only browser client has no bearer
+  credential for those calls; use the generated browser clients or same-origin
+  functions. `functions.invoke` includes browser cookies.
 - Header mode remains unchanged for non-browser clients and legacy sessions.
 
-## Requires a major version or explicit founder sign-off
+## Historical rollout constraints (July 2026)
+
+These constraints record the original auth convergence decision, not current
+platform guardrail policy.
 
 - Removing either source-compatible SDK auth shape.
 - Changing the root SDK's `{ data, error, status }` contract to the auth
