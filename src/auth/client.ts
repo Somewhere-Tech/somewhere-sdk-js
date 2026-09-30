@@ -781,6 +781,12 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
           unconfirmed(new AuthError(`The server did not confirm sign-out (${res.status}).`, res.status, 'SIGN_OUT_UNCONFIRMED'));
           return;
         }
+        // /logout's finite JSON response should finish being read. Header
+        // success already confirms logout; body latency/failure must not hold
+        // the mutation queue or change that confirmation.
+        if (res.body !== null && res.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() === 'application/json') {
+          void res.text().catch(() => {});
+        }
         owedSignOut = null;
         if (error?.code === 'SIGN_OUT_UNCONFIRMED') error = null;
         emit();
