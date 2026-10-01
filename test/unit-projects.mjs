@@ -99,6 +99,30 @@ async function main() {
       res.error instanceof SomewhereError && res.error.code === 'INVALID_API_KEY' && rec.calls.length === 0);
   }
 
+  console.log('projects.seoCheck');
+  {
+    const data = { label: 'Deployed SEO metadata', coverage: { public_response: 'unobserved' }, items: [{ name: 'title', value_count: 1000, values: ['Title'], values_truncated: true }] };
+    const rec = recorder(() => ({ json: { ok: true, data } }));
+    const sw = new Somewhere({ key: 'smt_test', projectId: 'my-app', fetch: rec.fetchImpl });
+    const res = await sw.projects.seoCheck();
+    check('SEO uses default project and developer GET', rec.calls[0].method === 'GET' && rec.calls[0].url.endsWith('/v1/projects/my-app/seo') && rec.calls[0].headers.Authorization === 'Bearer smt_test');
+    check('SEO preserves artifact provenance and bounded counts', JSON.stringify(res.data) === JSON.stringify(data));
+    await sw.projects.seoCheck('other/project');
+    check('SEO encodes explicit project override', rec.calls[1].url.endsWith('/v1/projects/other%2Fproject/seo'));
+  }
+  {
+    const rec = recorder(() => ({ status: 409, json: { ok: false, error: 'SEO_UNAVAILABLE', message: 'Release unavailable' } }));
+    const sw = new Somewhere({ key: 'smt_test', projectId: 'my-app', fetch: rec.fetchImpl });
+    const res = await sw.projects.seoCheck();
+    check('SEO preserves unavailable error and status', res.data === null && res.error instanceof SomewhereError && res.status === 409);
+  }
+  {
+    const rec = recorder();
+    const sw = new Somewhere({ token: 'eyJ.jwt.token', projectId: 'my-app', fetch: rec.fetchImpl });
+    const res = await sw.projects.seoCheck();
+    check('SEO requires developer authority before network', res.error instanceof SomewhereError && rec.calls.length === 0);
+  }
+
   if (failures > 0) {
     console.error(`\nunit-projects: ${failures} failure(s)`);
     process.exit(1);

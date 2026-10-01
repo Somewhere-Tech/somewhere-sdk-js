@@ -20,8 +20,52 @@ export interface ProjectAllowedOrigins {
   updated?: boolean;
 }
 
+export type SeoStatus = 'automatic' | 'app-supplied' | 'needs-attention' | 'unknown';
+export interface SeoMetadataItem {
+  name: string;
+  status: SeoStatus;
+  provenance: 'platform-fallback' | 'release-html' | 'release-file' | 'unobserved';
+  values: string[];
+  value_count: number;
+  values_truncated: boolean;
+  note: string;
+  suggestion: string | null;
+}
+export interface ProjectSeoMetadata {
+  project_id: string;
+  release_id: string;
+  version: number;
+  source_manifest_hash: string;
+  compiled_artifact_digest: string;
+  checked_at: string;
+  label: 'Deployed SEO metadata';
+  items: SeoMetadataItem[];
+  coverage: {
+    paths: ['/'];
+    mode: 'static-homepage-only';
+    client_routes: 'unknown';
+    public_response: 'unobserved';
+    note: string;
+  };
+}
+
 export class ProjectsClient {
   constructor(private readonly client: Client) {}
+
+  /** Inspect deployed homepage files and configured SEO defaults; live rendering and indexing remain unverified. */
+  async seoCheck(projectId?: string): Promise<Result<ProjectSeoMetadata>> {
+    const id = this.client.requireProjectId(projectId, 'projects.seoCheck');
+    try {
+      const result = await this.client.call<ProjectSeoMetadata>(
+        'GET',
+        `/projects/${encodeURIComponent(id)}/seo`,
+        { auth: 'developer' },
+      );
+      return { data: result, error: null, status: 200 };
+    } catch (err) {
+      return toResultError(err);
+    }
+  }
 
   /** Read a project's exact cross-origin allowlist (CORS allowed_origins). */
   async getAllowedOrigins(projectId?: string): Promise<Result<ProjectAllowedOrigins>> {
