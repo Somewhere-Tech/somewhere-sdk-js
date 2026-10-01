@@ -6,6 +6,22 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## 0.11.3 (2026-10-01) — project SEO metadata and optional analytics consent
+
+### Added
+- `projects.seoCheck(projectId?)` reads SEO metadata from the active release's
+  deployed homepage artifacts. It returns release provenance and coverage;
+  live rendering, other client routes and search indexing remain unverified.
+- `projects.update({ analytics_consent: { mode, policy_version } }, projectId?)`
+  updates the optional project analytics consent policy. The platform validates
+  the policy and project editor access. Both methods use developer credentials
+  and accept the configured project or an explicit project ID.
+- Exported SEO metadata and analytics consent policy/update result types.
+
+### Tests
+- The normal test suite now runs the existing analytics consent update fixture
+  alongside the existing project metadata and authorization checks.
+
 ## 0.11.1 (2026-09-27) — a sign-out is pending until the server answers
 
 ### Added
