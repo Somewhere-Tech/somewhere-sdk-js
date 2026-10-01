@@ -49,8 +49,35 @@ export interface ProjectSeoMetadata {
   };
 }
 
+export interface AnalyticsConsentPolicy {
+  mode: 'off' | 'required';
+  policy_version: string;
+}
+export interface ProjectUpdateInput {
+  analytics_consent: AnalyticsConsentPolicy;
+}
+export interface ProjectUpdateResult {
+  updated: true;
+  analytics_consent: AnalyticsConsentPolicy | null;
+}
+
 export class ProjectsClient {
   constructor(private readonly client: Client) {}
+
+  /** Update the optional analytics consent policy; the platform validates policy and editor access. */
+  async update(settings: ProjectUpdateInput, projectId?: string): Promise<Result<ProjectUpdateResult>> {
+    const id = this.client.requireProjectId(projectId, 'projects.update');
+    try {
+      const result = await this.client.call<ProjectUpdateResult>(
+        'PATCH',
+        `/projects/${encodeURIComponent(id)}`,
+        { body: settings, auth: 'developer' },
+      );
+      return { data: result, error: null, status: 200 };
+    } catch (err) {
+      return toResultError(err);
+    }
+  }
 
   /** Inspect deployed homepage files and configured SEO defaults; live rendering and indexing remain unverified. */
   async seoCheck(projectId?: string): Promise<Result<ProjectSeoMetadata>> {

@@ -43,7 +43,7 @@ export { TasksClient } from './resources/tasks.js';
 export type { Task, CreateTaskInput, UpdateTaskInput, TaskListOptions } from './resources/tasks.js';
 export { ProjectsClient } from './resources/projects.js';
 export type { ProjectSeoMetadata, SeoMetadataItem, SeoStatus } from './resources/projects.js';
-export type { ProjectAllowedOrigins } from './resources/projects.js';
+export type { AnalyticsConsentPolicy, ProjectUpdateInput, ProjectUpdateResult, ProjectAllowedOrigins } from './resources/projects.js';
 export type { SomewhereOptions };
 
 /**
