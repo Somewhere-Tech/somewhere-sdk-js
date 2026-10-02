@@ -766,8 +766,12 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
         try {
           res = await fetch(url('/logout'), {
             method: 'POST',
+            // A header session is revoked by its refresh token, sent as the same
+            // ride-along header authFetch uses; the access bearer alone revokes
+            // nothing. `had` is captured at call time, so a retry resends the
+            // credential of the session it is for, never a newer one.
             headers: had
-              ? { 'Content-Type': 'application/json', Authorization: `Bearer ${had.accessToken}` }
+              ? { 'Content-Type': 'application/json', Authorization: `Bearer ${had.accessToken}`, [RIDE_ALONG_HEADER]: had.refreshToken }
               : { 'Content-Type': 'application/json' },
             signal,
             ...(preferCookie ? { credentials: 'include' as RequestCredentials } : {}),

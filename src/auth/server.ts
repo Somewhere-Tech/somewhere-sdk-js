@@ -79,6 +79,20 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
+function logoutRefused(code: string, message: string, status: number): Response {
+  return json({ ok: false, error: code, message }, status);
+}
+
+/** A sign-out the platform did not confirm: its code when it is a code, its
+ *  status when it is a 4xx, otherwise 502. Never a 2xx. The outcome is unknown
+ *  here, so the message never claims the session stayed signed in. */
+function logoutFailed(err: unknown): Response {
+  const e = (err && typeof err === 'object' ? err : {}) as { code?: unknown; status?: unknown };
+  const code = typeof e.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(e.code) ? e.code : 'SIGN_OUT_FAILED';
+  const status = typeof e.status === 'number' && Number.isInteger(e.status) && e.status >= 400 && e.status < 500 ? e.status : 502;
+  return logoutRefused(code, 'Could not confirm sign-out.', status);
+}
+
 interface TokenBundle {
   token?: string;
   access_token?: string;
@@ -204,12 +218,48 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
       return sessionResponse(d);
     }
     if (method === 'POST' && sub === '/logout') {
-      // logoutWithCookie revokes the session from the refresh cookie AND
-      // parks the Set-Cookie expirations; harmless when no cookies exist.
-      if (typeof sw.auth.logoutWithCookie === 'function') {
-        try { await sw.auth.logoutWithCookie(req); } catch { /* best-effort */ }
-      } else {
-        try { await sw.auth.logout({}); } catch { /* best-effort */ }
+      // Header mode: the platform revokes a session by its refresh token, which
+      // the client sends as X-Refresh-Token; the access bearer alone revokes
+      // nothing. Only a confirmed revoke answers 2xx. Every refusal stays
+      // non-2xx — SESSION_NOT_FOUND included, because a rotated-away token can
+      // miss a newer live session — so the client keeps the sign-out owed.
+      const headerRefresh = req.headers.get('X-Refresh-Token');
+      if (headerRefresh !== null) {
+        if (!headerRefresh.trim()) return logoutRefused('VALIDATION_ERROR', 'X-Refresh-Token is empty; nothing was signed out.', 400);
+        let result: unknown;
+        try {
+          result = await sw.auth.logout({ refresh_token: headerRefresh });
+        } catch (err) {
+          return logoutFailed(err);
+        }
+        if ((result as { logged_out?: unknown } | null)?.logged_out !== true) {
+          return logoutRefused('SIGN_OUT_UNCONFIRMED', 'Could not confirm sign-out.', 502);
+        }
+        return json({ ok: true });
+      }
+      // A bearer with no refresh token is a header client that cannot be signed
+      // out here (SDK 0.11.4 and earlier sent only the bearer). Refuse instead of
+      // answering ok for a session that stays live.
+      if (/^bearer\s/i.test(req.headers.get('Authorization') || '')) {
+        return logoutRefused('LOGOUT_REFRESH_REQUIRED', 'Header sign-out needs the session refresh token in X-Refresh-Token; nothing was signed out.', 400);
+      }
+      // Cookie mode: logoutWithCookie revokes the session from the refresh
+      // cookie and parks the Set-Cookie expirations. Only its confirmed
+      // { ok: true } answers 2xx; a refusal or unconfirmed revocation keeps its
+      // code and stays non-2xx, so the client keeps the sign-out owed.
+      if (typeof sw.auth.logoutWithCookie !== 'function') {
+        // A runtime without the cookie helper cannot revoke a cookie session;
+        // nothing is called, so nothing was signed out.
+        return logoutRefused('COOKIE_SESSION_UNAVAILABLE', 'This runtime cannot sign out a cookie session; nothing was signed out.', 501);
+      }
+      let cookieResult: unknown;
+      try {
+        cookieResult = await sw.auth.logoutWithCookie(req);
+      } catch (err) {
+        return logoutFailed(err);
+      }
+      if ((cookieResult as { ok?: unknown } | null)?.ok !== true) {
+        return logoutRefused('SIGN_OUT_UNCONFIRMED', 'Could not confirm sign-out.', 502);
       }
       return json({ ok: true });
     }

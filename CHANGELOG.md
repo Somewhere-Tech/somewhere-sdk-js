@@ -6,6 +6,37 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## 0.11.5 (2026-10-02) — sign-out answers ok only when it is confirmed
+
+### Fixed
+- Header sessions are now actually revoked on sign-out. `signOut()` sends the
+  session's refresh token as `X-Refresh-Token`, and `somewhereAuth`'s
+  `POST /logout` revokes that refresh session. It answers 2xx only when the
+  platform confirms the revocation; any refusal, including
+  `SESSION_NOT_FOUND`, stays non-2xx, so the client keeps the sign-out marked
+  unconfirmed. A bearer with no refresh token, which is what 0.11.4 and earlier
+  clients sent, is refused with `400 LOGOUT_REFRESH_REQUIRED` instead of
+  answering ok for a session that stayed live.
+- Cookie sign-out no longer hides errors. An error thrown by the runtime's
+  `sw.auth.logoutWithCookie` becomes a non-2xx response that keeps its code
+  (and its status when it is a 4xx, otherwise 502), with the message "Could
+  not confirm sign-out.". An answer other than `{ ok: true }` is
+  `502 SIGN_OUT_UNCONFIRMED`. A runtime without the helper gets
+  `501 COOKIE_SESSION_UNAVAILABLE`; the handler no longer calls `logout({})`
+  and reports success.
+
+### Upgrading
+- Apps already deployed keep the SDK they were bundled with. Update the SDK
+  dependency and lockfile to 0.11.5, then redeploy as usual.
+- This release does not fix cookie sign-out on its own. The platform runtime's
+  current `logoutWithCookie` still swallows upstream revocation errors and
+  answers ok, so cookie sign-out behaves as before until that runtime update is
+  deployed.
+
+### Tests
+- `test/unit-header-logout.mjs` and `test/unit-cookie-logout.mjs` cover
+  confirmed, refused, unconfirmed and malformed outcomes in both modes.
+
 ## 0.11.4 (2026-10-02) — server auth adapter accepts the platform runtime context
 
 ### Fixed
