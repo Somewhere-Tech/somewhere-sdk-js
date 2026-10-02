@@ -41,11 +41,13 @@ export interface SwAuthNamespace {
     ): Promise<unknown>;
     logout(opts: Record<string, unknown>): Promise<unknown>;
     fromRequest(req: Request, enrich?: unknown): Promise<unknown>;
-    googleUrl(opts: { redirect_uri: string }): Promise<unknown>;
+    // The platform runtime returns the OAuth URL synchronously as a string; an
+    // older async adapter may resolve a string or { url }. The handler accepts both.
+    googleUrl(opts: { redirect_uri: string }): string | Promise<unknown>;
     googleExchange(opts: { code: string }): Promise<unknown>;
-    githubUrl(opts: { redirect_uri: string }): Promise<unknown>;
+    githubUrl(opts: { redirect_uri: string }): string | Promise<unknown>;
     githubExchange(opts: { code: string }): Promise<unknown>;
-    discordUrl(opts: { redirect_uri: string }): Promise<unknown>;
+    discordUrl(opts: { redirect_uri: string }): string | Promise<unknown>;
     discordExchange(opts: { code: string }): Promise<unknown>;
     signInWithOtp(opts: { email: string; redirect_uri?: string }): Promise<unknown>;
     verifyOtp(opts: { token: string }): Promise<unknown>;
@@ -63,9 +65,10 @@ export interface SwAuthNamespace {
    *  Optional so the handler degrades cleanly on an older runtime. */
   payments?: {
     // The runtime derives the buyer from the request's signed-in user; it takes
-    // no user id (runtime v2, 2026-08-02).
-    checkoutForUser(opts: { plan: string; success_url?: string; cancel_url?: string }): Promise<{ url?: string } & Record<string, unknown>>;
-    portalForUser(opts: { return_url?: string }): Promise<{ url?: string } & Record<string, unknown>>;
+    // no user id (runtime v2, 2026-08-02). The handler returns the result as-is;
+    // a checkout session's url may be null.
+    checkoutForUser(opts: { plan: string; success_url?: string; cancel_url?: string }): Promise<{ url?: string | null }>;
+    portalForUser(opts: { return_url?: string }): Promise<{ url?: string | null }>;
   };
 }
 
