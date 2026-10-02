@@ -6,6 +6,21 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## 0.11.4 (2026-10-02) — server auth adapter accepts the platform runtime context
+
+### Fixed
+- `@somewhere-tech/sdk/server`: the `SwAuthNamespace` type now accepts the
+  platform's generated `sw` runtime context, so `somewhereAuth` type-checks as
+  a deployed function's `(req, sw)` handler. The Google, GitHub and Discord
+  URL helpers may return the URL synchronously as a string (older
+  asynchronous adapters that resolve a string or `{ url }` still fit), and
+  `checkoutForUser`/`portalForUser` results may carry `url: null`. Handler
+  behaviour and argument types are unchanged.
+
+### Tests
+- A type-level test checks `somewhereAuth` against a frozen copy of the
+  platform's runtime context declarations, with negative controls.
+
 ## 0.11.3 (2026-10-01) — project SEO metadata and optional analytics consent
 
 ### Added
