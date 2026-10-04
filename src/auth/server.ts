@@ -24,7 +24,8 @@
  * (COOKIE_SESSION_UNAVAILABLE) instead of falling back to tokens.
  *
  * Covered today: email/password (signup, login, logout), magic-link/OTP,
- * Google/GitHub/Discord OAuth (url + exchange), and `me` (validate + refresh).
+ * email verification for the signed-in account, Google/GitHub/Discord OAuth
+ * (url + exchange), and `me` (validate + refresh).
  */
 
 /** The slice of the platform `sw` namespace this handler uses. */
@@ -55,6 +56,10 @@ export interface SwAuthNamespace {
      *  degrades to token bodies on runtimes that predate them. */
     setSessionCookies?(access: string, refresh: string): void;
     logoutWithCookie?(req: Request): Promise<unknown>;
+    /** Email verification for the request's own session — optional so the
+     *  handler answers 501 on a runtime that predates them. */
+    requestEmailVerificationWithCookie?(req: Request): Promise<unknown>;
+    verifyEmailWithCookie?(req: Request, opts: { code: string }): Promise<unknown>;
   };
   /** Entitlements (sw.billing) — optional so the handler degrades cleanly on a
    *  runtime that predates it (the /plans route 404s instead of throwing). */
@@ -77,6 +82,15 @@ function json(data: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+/** A refused verification call, keeping the platform's code and 4xx status. */
+function verificationFailed(err: unknown): Response {
+  const e = (err && typeof err === 'object' ? err : {}) as { code?: unknown; status?: unknown; message?: unknown };
+  const code = typeof e.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(e.code) ? e.code : 'EMAIL_VERIFICATION_FAILED';
+  const status = typeof e.status === 'number' && Number.isInteger(e.status) && e.status >= 400 && e.status < 500 ? e.status : 502;
+  const message = typeof e.message === 'string' && e.message ? e.message : 'Email verification failed.';
+  return json({ error: code, message }, status);
 }
 
 function logoutRefused(code: string, message: string, status: number): Response {
@@ -266,6 +280,25 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
     if (method === 'GET' && sub === '/me') {
       const user = await sw.auth.fromRequest(req);
       return json({ user: user ?? null });
+    }
+    // Email verification. The account is the request's own session (the
+    // httpOnly cookie, or a Bearer header); no token is read here or returned.
+    if (method === 'GET' && sub === '/verify-email') {
+      const user = (await sw.auth.fromRequest(req)) as { email_verified?: unknown } | null;
+      if (!user) return json({ error: 'AUTH_REQUIRED', message: 'Sign in required.' }, 401);
+      return json({ email_verified: user.email_verified === true });
+    }
+    if (method === 'POST' && (sub === '/request-email-verification' || sub === '/verify-email')) {
+      if (typeof sw.auth.requestEmailVerificationWithCookie !== 'function' || typeof sw.auth.verifyEmailWithCookie !== 'function') {
+        return json({ error: 'EMAIL_VERIFICATION_UNAVAILABLE', message: 'This deploy predates email verification for cookie sessions. Redeploy to pick up the current runtime.' }, 501);
+      }
+      try {
+        if (sub === '/request-email-verification') return json(await sw.auth.requestEmailVerificationWithCookie(req));
+        const b = await readBody();
+        return json(await sw.auth.verifyEmailWithCookie(req, { code: String(b.code ?? '') }));
+      } catch (err) {
+        return verificationFailed(err);
+      }
     }
     if (method === 'POST' && sub === '/magic-link') {
       const b = await readBody();

@@ -229,6 +229,13 @@ export interface SomewhereAuth {
   /** Send a magic-link / OTP email. The link/code completes via verifyMagicLink. */
   sendMagicLink(input: { email: string; redirectUri?: string }): Promise<void>;
   verifyMagicLink(input: { token: string }): Promise<User>;
+  /** Whether the signed-in account's email address is verified. */
+  emailVerified(): Promise<boolean>;
+  /** Email the signed-in account a 6-digit verification code. The session
+   *  decides the account; no token is handled in page code. */
+  requestEmailVerification(): Promise<void>;
+  /** Check that code; resolves once the address is verified. */
+  verifyEmail(input: { code: string }): Promise<void>;
   /** Get the platform-owned Google OAuth URL (no Google project needed). */
   googleSignInUrl(input?: { redirectUri?: string }): Promise<string>;
   /** Exchange a Google `?code=` (from the callback) for a session. */
@@ -708,6 +715,30 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       }
     },
     verifyMagicLink: (i) => postForSession('/magic-link/verify', { token: i.token }),
+    emailVerified: async () => {
+      const res = await authFetch(url('/verify-email'), { method: 'GET' });
+      const b = (await res.json().catch(() => ({}))) as { email_verified?: unknown; message?: string; error?: string };
+      if (!res.ok) throw new AuthError(b.message || b.error || `Could not check the email address (${res.status})`, res.status);
+      return b.email_verified === true;
+    },
+    requestEmailVerification: async () => {
+      const res = await authFetch(url('/request-email-verification'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+        throw new AuthError(b.message || b.error || `Could not send the verification code (${res.status})`, res.status);
+      }
+    },
+    verifyEmail: async (i) => {
+      const res = await authFetch(url('/verify-email'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: i.code }),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+        throw new AuthError(b.message || b.error || `Could not verify the code (${res.status})`, res.status);
+      }
+    },
     googleSignInUrl: async (i) => {
       const res = await fetch(url(`/google-url${i?.redirectUri ? `?redirect_uri=${encodeURIComponent(i.redirectUri)}` : ''}`));
       const b = (await res.json().catch(() => ({}))) as { url?: string; data?: { url?: string } };

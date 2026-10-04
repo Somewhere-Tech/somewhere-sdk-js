@@ -65,6 +65,9 @@ const contract = [
   { client: 'signIn', route: 'POST /api/auth/login', runtime: 'auth.loginWithCookie' },
   { client: 'sendMagicLink', route: 'POST /api/auth/magic-link', runtime: 'auth.signInWithOtp' },
   { client: 'verifyMagicLink', route: 'POST /api/auth/magic-link/verify', runtime: 'auth.verifyOtp' },
+  { client: 'emailVerified', route: 'GET /api/auth/verify-email', runtime: 'auth.fromRequest' },
+  { client: 'requestEmailVerification', route: 'POST /api/auth/request-email-verification', runtime: 'auth.requestEmailVerificationWithCookie' },
+  { client: 'verifyEmail', route: 'POST /api/auth/verify-email', runtime: 'auth.verifyEmailWithCookie' },
   { client: 'googleSignInUrl', route: 'GET /api/auth/google-url', runtime: 'auth.googleUrl' },
   { client: 'completeGoogleSignIn', route: 'POST /api/auth/google', runtime: 'auth.googleExchange' },
   { client: 'githubSignInUrl', route: 'GET /api/auth/github-url', runtime: 'auth.githubUrl' },
@@ -111,6 +114,8 @@ const sw = {
     verifyOtp: called('auth.verifyOtp', tokenBundle),
     setSessionCookies: (...args) => runtimeCalls.push({ name: 'auth.setSessionCookies', args }),
     logoutWithCookie: called('auth.logoutWithCookie', { ok: true }),
+    requestEmailVerificationWithCookie: called('auth.requestEmailVerificationWithCookie', { sent: true, code_created: true, expires_in_seconds: 900 }),
+    verifyEmailWithCookie: called('auth.verifyEmailWithCookie', { verified: true }),
   },
   billing: {
     plans: called('billing.plans', { plans: [{ slug: 'pro', name: 'Pro' }] }),
@@ -156,6 +161,9 @@ const invoke = {
   signIn: () => auth.signIn({ email: user.email, password: 'password' }),
   sendMagicLink: () => auth.sendMagicLink({ email: user.email, redirectUri: 'https://app.example/after-login' }),
   verifyMagicLink: () => auth.verifyMagicLink({ token: 'magic-token' }),
+  emailVerified: () => auth.emailVerified(),
+  requestEmailVerification: () => auth.requestEmailVerification(),
+  verifyEmail: () => auth.verifyEmail({ code: '123456' }),
   googleSignInUrl: () => auth.googleSignInUrl(),
   completeGoogleSignIn: () => auth.completeGoogleSignIn({ code: 'google-code' }),
   githubSignInUrl: () => auth.githubSignInUrl(),
@@ -204,6 +212,11 @@ check('sendMagicLink forwards email + redirect_uri to signInWithOtp',
 const magicVerify = runtimeCalls.find(({ name }) => name === 'auth.verifyOtp');
 check('verifyMagicLink forwards the token to verifyOtp',
   magicVerify?.args[0]?.token === 'magic-token');
+const emailVerify = runtimeCalls.find(({ name }) => name === 'auth.verifyEmailWithCookie');
+check('verifyEmail forwards the code with the request (its session decides the account)',
+  emailVerify?.args[0] instanceof Request && emailVerify?.args[1]?.code === '123456');
+check('requestEmailVerification forwards the request itself',
+  runtimeCalls.find(({ name }) => name === 'auth.requestEmailVerificationWithCookie')?.args[0] instanceof Request);
 check('default handler path is /api/auth',
   routeCalls.some((route) => route === 'POST /api/auth/login')
     && !routeCalls.some((route) => route.includes(' /auth/')));
