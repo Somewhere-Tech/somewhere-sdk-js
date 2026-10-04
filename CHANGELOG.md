@@ -6,6 +6,28 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## 0.11.6 (2026-10-04) — email verification for cookie sessions
+
+### Added
+- `somewhereAuth` serves email verification for the request's own session,
+  with no token in app or browser code:
+  - `GET /verify-email` returns `{ email_verified }` (401 `AUTH_REQUIRED` when
+    signed out);
+  - `POST /request-email-verification` emails a 6-digit code to the account's
+    address;
+  - `POST /verify-email` with `{ code }` checks it.
+- Client methods on `createSomewhereAuth()`: `auth.emailVerified()`,
+  `auth.requestEmailVerification()` and `auth.verifyEmail({ code })`. They use
+  the session through the packaged handler.
+- A refusal keeps the platform's code and 4xx status (for example
+  `AUTH_INVALID_CODE` 400); any other failure answers 502, never success. A
+  runtime without the cookie verification helpers answers
+  `501 EMAIL_VERIFICATION_UNAVAILABLE` before calling anything.
+
+### Upgrading
+- Update the SDK dependency and lockfile to 0.11.6, then redeploy as usual.
+  Apps already deployed keep the SDK they were bundled with.
+
 ## 0.11.5 (2026-10-02) — sign-out answers ok only when it is confirmed
 
 ### Fixed
