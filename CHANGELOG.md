@@ -6,6 +6,18 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## Unreleased — browser-bound social sign-in (platform tsk_ec24c4ba)
+
+### Changed
+- `somewhereAuth` starts Google, GitHub and Discord sign-in with the runtime's
+  `sw.auth.oauthStart(provider, { redirect_uri })`, which binds the attempt to
+  the browser that starts it (an HttpOnly verifier cookie on this response;
+  only its challenge travels in the URL). `GET /api/auth/<provider>-url` still
+  answers `{ url }`, and the exchange routes are unchanged.
+- A runtime without `oauthStart` answers `501 OAUTH_START_UNAVAILABLE` (redeploy
+  to pick up the current runtime) instead of starting an unbound sign-in. The
+  old `googleUrl` / `githubUrl` / `discordUrl` builders are never called.
+
 ## 0.11.6 (2026-10-04) — email verification for cookie sessions
 
 ### Added

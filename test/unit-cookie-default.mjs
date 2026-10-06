@@ -52,11 +52,9 @@ function makeSw({ canCookie = true, bundle = BUNDLE, fail = null } = {}) {
     async fromRequest() { return staged.length ? USER : null; },
     async signInWithOtp() { return { ok: true }; },
     async verifyOtp() { if (fail) throw fail; return bundle; },
-    async googleUrl() { return { url: 'https://google/x' }; },
+    async oauthStart(provider) { return `https://${provider}/x`; },
     async googleExchange() { if (fail) throw fail; return bundle; },
-    async githubUrl() { return { url: 'https://github/x' }; },
     async githubExchange() { if (fail) throw fail; return bundle; },
-    async discordUrl() { return { url: 'https://discord/x' }; },
     async discordExchange() { if (fail) throw fail; return bundle; },
   };
   if (canCookie) {

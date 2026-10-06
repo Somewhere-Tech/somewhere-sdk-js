@@ -42,13 +42,18 @@ export interface SwAuthNamespace {
     ): Promise<unknown>;
     logout(opts: Record<string, unknown>): Promise<unknown>;
     fromRequest(req: Request, enrich?: unknown): Promise<unknown>;
-    // The platform runtime returns the OAuth URL synchronously as a string; an
-    // older async adapter may resolve a string or { url }. The handler accepts both.
-    googleUrl(opts: { redirect_uri: string }): string | Promise<unknown>;
+    /** Start browser-bound social sign-in: stages this attempt's HttpOnly
+     *  verifier cookie on the response and resolves the provider start URL.
+     *  Optional so the handler answers 501 on a runtime that predates it. */
+    oauthStart?(provider: 'google' | 'github' | 'discord', opts: { redirect_uri: string }): Promise<string>;
+    /** @deprecated Refused by current runtimes; social sign-in starts with oauthStart. Never called by this handler. */
+    googleUrl?(opts: { redirect_uri: string }): string | Promise<unknown>;
     googleExchange(opts: { code: string }): Promise<unknown>;
-    githubUrl(opts: { redirect_uri: string }): string | Promise<unknown>;
+    /** @deprecated Refused by current runtimes; social sign-in starts with oauthStart. Never called by this handler. */
+    githubUrl?(opts: { redirect_uri: string }): string | Promise<unknown>;
     githubExchange(opts: { code: string }): Promise<unknown>;
-    discordUrl(opts: { redirect_uri: string }): string | Promise<unknown>;
+    /** @deprecated Refused by current runtimes; social sign-in starts with oauthStart. Never called by this handler. */
+    discordUrl?(opts: { redirect_uri: string }): string | Promise<unknown>;
     discordExchange(opts: { code: string }): Promise<unknown>;
     signInWithOtp(opts: { email: string; redirect_uri?: string }): Promise<unknown>;
     verifyOtp(opts: { token: string }): Promise<unknown>;
@@ -362,30 +367,27 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
       });
       return json(result);
     }
-    if (method === 'GET' && sub === '/google-url') {
+    // Social sign-in is bound to the browser that starts it: the runtime stages
+    // this attempt's verifier cookie on this response and only its challenge
+    // travels in the URL. There is no unbound fallback to the old URL builders.
+    const oauthStartRoute = method === 'GET' ? /^\/(google|github|discord)-url$/.exec(sub) : null;
+    if (oauthStartRoute) {
+      if (typeof sw.auth.oauthStart !== 'function') {
+        return json({ error: 'OAUTH_START_UNAVAILABLE', message: 'This deploy predates browser-bound social sign-in. Redeploy to pick up the current runtime.' }, 501);
+      }
+      const provider = oauthStartRoute[1] as 'google' | 'github' | 'discord';
       const redirectUri = url.searchParams.get('redirect_uri') || `${url.origin}/api/auth/callback`;
-      const r = (await sw.auth.googleUrl({ redirect_uri: redirectUri })) as { url?: string } | string;
-      return json({ url: typeof r === 'string' ? r : r?.url });
+      return json({ url: await sw.auth.oauthStart(provider, { redirect_uri: redirectUri }) });
     }
     if (method === 'POST' && sub === '/google') {
       const b = await readBody();
       const d = await sw.auth.googleExchange({ code: String(b.code ?? '') });
       return sessionResponse(d);
     }
-    if (method === 'GET' && sub === '/github-url') {
-      const redirectUri = url.searchParams.get('redirect_uri') || `${url.origin}/api/auth/callback`;
-      const r = (await sw.auth.githubUrl({ redirect_uri: redirectUri })) as { url?: string } | string;
-      return json({ url: typeof r === 'string' ? r : r?.url });
-    }
     if (method === 'POST' && sub === '/github') {
       const b = await readBody();
       const d = await sw.auth.githubExchange({ code: String(b.code ?? '') });
       return sessionResponse(d);
-    }
-    if (method === 'GET' && sub === '/discord-url') {
-      const redirectUri = url.searchParams.get('redirect_uri') || `${url.origin}/api/auth/callback`;
-      const r = (await sw.auth.discordUrl({ redirect_uri: redirectUri })) as { url?: string } | string;
-      return json({ url: typeof r === 'string' ? r : r?.url });
     }
     if (method === 'POST' && sub === '/discord') {
       const b = await readBody();

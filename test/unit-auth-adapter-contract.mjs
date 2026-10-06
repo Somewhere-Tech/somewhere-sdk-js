@@ -68,11 +68,11 @@ const contract = [
   { client: 'emailVerified', route: 'GET /api/auth/verify-email', runtime: 'auth.fromRequest' },
   { client: 'requestEmailVerification', route: 'POST /api/auth/request-email-verification', runtime: 'auth.requestEmailVerificationWithCookie' },
   { client: 'verifyEmail', route: 'POST /api/auth/verify-email', runtime: 'auth.verifyEmailWithCookie' },
-  { client: 'googleSignInUrl', route: 'GET /api/auth/google-url', runtime: 'auth.googleUrl' },
+  { client: 'googleSignInUrl', route: 'GET /api/auth/google-url', runtime: 'auth.oauthStart' },
   { client: 'completeGoogleSignIn', route: 'POST /api/auth/google', runtime: 'auth.googleExchange' },
-  { client: 'githubSignInUrl', route: 'GET /api/auth/github-url', runtime: 'auth.githubUrl' },
+  { client: 'githubSignInUrl', route: 'GET /api/auth/github-url', runtime: 'auth.oauthStart' },
   { client: 'completeGithubSignIn', route: 'POST /api/auth/github', runtime: 'auth.githubExchange' },
-  { client: 'discordSignInUrl', route: 'GET /api/auth/discord-url', runtime: 'auth.discordUrl' },
+  { client: 'discordSignInUrl', route: 'GET /api/auth/discord-url', runtime: 'auth.oauthStart' },
   { client: 'completeDiscordSignIn', route: 'POST /api/auth/discord', runtime: 'auth.discordExchange' },
   { client: 'signOut', route: 'POST /api/auth/logout', runtime: 'auth.logoutWithCookie' },
   { client: 'getUser', route: 'GET /api/auth/me', runtime: 'auth.fromRequest' },
@@ -104,11 +104,9 @@ const sw = {
     loginWithCookie: called('auth.loginWithCookie', user),
     logout: called('auth.logout', { ok: true }),
     fromRequest: called('auth.fromRequest', user),
-    googleUrl: called('auth.googleUrl', { url: 'https://google.example/authorize' }),
+    oauthStart: called('auth.oauthStart', (provider) => `https://${provider}.example/authorize`),
     googleExchange: called('auth.googleExchange', tokenBundle),
-    githubUrl: called('auth.githubUrl', { url: 'https://github.example/authorize' }),
     githubExchange: called('auth.githubExchange', tokenBundle),
-    discordUrl: called('auth.discordUrl', { url: 'https://discord.example/authorize' }),
     discordExchange: called('auth.discordExchange', tokenBundle),
     signInWithOtp: called('auth.signInWithOtp', { ok: true }),
     verifyOtp: called('auth.verifyOtp', tokenBundle),
@@ -220,10 +218,10 @@ check('requestEmailVerification forwards the request itself',
 check('default handler path is /api/auth',
   routeCalls.some((route) => route === 'POST /api/auth/login')
     && !routeCalls.some((route) => route.includes(' /auth/')));
-check('OAuth default callbacks stay under /api/auth',
-  ['auth.googleUrl', 'auth.githubUrl', 'auth.discordUrl'].every((name) => {
-    const call = runtimeCalls.find((candidate) => candidate.name === name);
-    return call?.args[0]?.redirect_uri === 'https://app.example/api/auth/callback';
+check('OAuth starts go through oauthStart per provider, with callbacks under /api/auth',
+  ['google', 'github', 'discord'].every((provider) => {
+    const call = runtimeCalls.find((candidate) => candidate.name === 'auth.oauthStart' && candidate.args[0] === provider);
+    return call?.args[1]?.redirect_uri === 'https://app.example/api/auth/callback';
   }));
 
 // ── Runtime response-contract generations (platform tsk_72c4b4d2, A-F05) ──
