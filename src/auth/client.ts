@@ -276,7 +276,6 @@ interface TokenResponse {
   data?: { token?: string; access_token?: string; refresh_token?: string; user?: User; cookie_session?: boolean };
 }
 
-/** undefined → 30000; anything else must be 1..2147483647 ms (setTimeout's range). */
 /** The social callback's public attempt id: passed explicitly, or read from the
  *  callback page's own URL. It only selects which of this browser's attempt
  *  cookies the server presents; the platform proves it before the code counts. */
@@ -287,6 +286,7 @@ function oauthAttempt(input: { attempt?: string }): { attempt?: string } {
   return fromUrl ? { attempt: fromUrl } : {};
 }
 
+/** undefined → 30000; anything else must be 1..2147483647 ms (setTimeout's range). */
 function mutationTimeout(value: unknown): number {
   if (value === undefined) return 30_000;
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 2_147_483_647) {
