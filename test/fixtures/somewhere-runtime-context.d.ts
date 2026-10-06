@@ -550,11 +550,12 @@ interface SomewhereRuntimeAuth {
   githubUrl(options: { redirect_uri: string }): never;
   /** @deprecated Always throws OAUTH_START_REQUIRES_BINDING: sign-in is bound to the browser that starts it. Use: Response.redirect(await sw.auth.oauthStart('discord', { redirect_uri }), 302). The parameter stays assignable so apps on older SDK types still typecheck. */
   discordUrl(options: { redirect_uri: string }): never;
-  googleExchange(options: { code: string; redirect_uri?: string }): Promise<SomewhereAuthGoogleSession>;
-  githubExchange(options: { code: string }): Promise<SomewhereAuthOAuthSession>;
-  discordExchange(options: { code: string }): Promise<SomewhereAuthOAuthSession>;
-  // Reads ?code, exchanges it with this browser's oauthStart verifier, stages the session cookies,
-  // clears that attempt, returns a 302 to redirectTo (default '/').
+  // Exchanges take the callback's ?code= and its public ?attempt= (which selects this browser's attempt cookie).
+  googleExchange(options: { code: string; attempt: string; redirect_uri?: string }): Promise<SomewhereAuthGoogleSession>;
+  githubExchange(options: { code: string; attempt: string }): Promise<SomewhereAuthOAuthSession>;
+  discordExchange(options: { code: string; attempt: string }): Promise<SomewhereAuthOAuthSession>;
+  // Reads ?code and ?attempt, exchanges with that attempt's oauthStart verifier from this request,
+  // stages the session cookies, clears that attempt, returns a 302 to redirectTo (default '/').
   googleCallbackWithCookie(req: Request, redirectTo?: string): Promise<Response>;
   githubCallbackWithCookie(req: Request, redirectTo?: string): Promise<Response>;
   discordCallbackWithCookie(req: Request, redirectTo?: string): Promise<Response>;
