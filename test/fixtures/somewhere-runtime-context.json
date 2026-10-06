@@ -1,11 +1,11 @@
 {
   "purpose": "Test-only frozen exact extract of the platform runtime context declarations, so the SDK type tests check somewhereAuth against the real generated SomewhereRuntimeContext. Not published (package.json files: dist, README.md, LICENSE).",
   "source": {
-    "repository": "somewhere-tech platform (local checkout /Volumes/pmwork/wt/core-agent-integration-20261002, read-only)",
-    "commit": "b08ef00406cc5b7179fca02fa67c322266d02014",
+    "repository": "somewhere-tech platform (local worktree /Volumes/pmwork/wt/social-signin-binding-20261006, branch sessions/social-signin-binding-20261006, read-only; unreleased candidate)",
+    "commit": "87822152e32c11d6037ac1c7668355c3c2d2b554",
     "path": "worker/containers/compile/runtime-types.cjs",
-    "git_blob": "e22eed283cfcf399429591942fcbf862ee5b9ff2",
-    "sha256": "18f7be5ecb727f14a2cd58f043625ff53879db8ea1e8df678c35f43835c89b98"
+    "git_blob": "71903c1c84e99a8f7153d2ab54f7dec27c2f30cf",
+    "sha256": "5257ed2ed5ec600e88d002cc476a4adc6a06c708365493cd08793ffce82179b5"
   },
   "extraction": {
     "method": "node require() of the committed blob (git show), concatenating the exported strings in this order",
@@ -13,17 +13,17 @@
       "RUNTIME_CONTEXT_DECLARATION",
       "ENDPOINT_DECLARATION"
     ],
-    "node": "v22.23.3",
+    "node": "v26.8.1",
     "transform": "none (exact string bytes, UTF-8, no header)"
   },
   "declarations_sha256": {
-    "RUNTIME_CONTEXT_DECLARATION": "ce62de73248aab9622ee2da6f2b95d31c02df0f1c0be3af8eb3d6be32a846343",
+    "RUNTIME_CONTEXT_DECLARATION": "741dfd829c2eefce0b919a5bd3d5bd2f9f20876de3fe30b3d0b2d1f0df9fe8fe",
     "ENDPOINT_DECLARATION": "86e97696556b552ce69562f8a8c6cd7fafcc54fcf18739c7e03b2d8b1036bcc3"
   },
   "output": {
     "path": "test/fixtures/somewhere-runtime-context.d.ts",
-    "bytes": 110068,
-    "sha256": "a56b19c24ae448f97c9d2be0b84d2fa109df268a32a2389b13162bb697e40822"
+    "bytes": 127697,
+    "sha256": "5b2828d810396bf98e05047e9db8e9a4fd30b917843ac66914a913d41f0b7fb4"
   },
   "refresh": "Re-extract only from a reviewed platform commit and update this metadata; never hand-edit the .d.ts."
 }

@@ -356,8 +356,39 @@ interface SomewhereAuthMfaRequired {
 }
 type SomewhereAuthLoginResult = SomewhereAuthIssuedSession | SomewhereAuthMfaRequired;
 interface SomewhereAuthOtpSession extends SomewhereAuthIssuedSession {
-  // The redirect_uri passed to signInWithOtp, or null.
+  // The redirect_uri passed to signInWithOtp, or null. For an invitation
+  // link: the invite's redirect_uri with ?invite_id=<id> added.
   redirect_uri: string | null;
+  // Present when the verified token was an invitation.
+  invite_id?: string;
+}
+type SomewhereAuthInviteStatus = 'pending' | 'accepted' | 'revoked' | 'expired';
+interface SomewhereAuthInvite {
+  id: string;
+  email: string;
+  status: SomewhereAuthInviteStatus;
+  redirect_uri: string;
+  // Server-side only; never in the email or the link.
+  data: SomewhereJsonObject | null;
+  expires_at: number;
+  created_at: number;
+  accepted_at: number | null;
+  accepted_user_id: string | null;
+  revoked_at: number | null;
+}
+interface SomewhereAuthInviteOptions {
+  email: string;
+  // A path in the app such as '/join', or an allowed absolute URL.
+  redirect_uri: string;
+  // At most 4096 bytes of JSON.
+  data?: SomewhereJsonObject;
+  // Seconds, 900 to 2592000; default 604800 (7 days).
+  expires_in?: number;
+}
+interface SomewhereAuthInviteSent {
+  invite: SomewhereAuthInvite;
+  delivery: 'sent' | 'pending';
+  message_id?: string;
 }
 interface SomewhereAuthOAuthSession {
   user: SomewhereAuthSignedInUser;
@@ -463,6 +494,19 @@ interface SomewhereRuntimeAuthMfa {
   verify(options: { token: string; enrollment_id: string; activation_token: string; code: string }):
     Promise<{ enabled: true; backup_codes: string[] }>;
   unenroll(options: { token: string; code: string }): Promise<{ enabled: false }>;
+  // The same steps for the request's own session (cookie or Bearer). verifyWithCookie ends every session and clears the cookies.
+  enrollWithCookie(req: Request): Promise<{
+    secret: string; enrollment_id: string; otpauth_uri: string; issuer: string; account: string;
+  }>;
+  reauthenticateWithCookie(req: Request, options: { enrollment_id: string; method: 'password'; password: string }):
+    Promise<{ method: 'password'; activation_token: string; expires_in_seconds: number }>;
+  reauthenticateWithCookie(req: Request, options: { enrollment_id: string; method: 'email' }):
+    Promise<{ method: 'email'; challenge_id: string; expires_in_seconds: number; pending?: true }>;
+  verifyReauthenticationWithCookie(req: Request, options: { enrollment_id: string; challenge_id: string; code: string }):
+    Promise<{ method: 'email'; activation_token: string; expires_in_seconds: number }>;
+  verifyWithCookie(req: Request, options: { enrollment_id: string; activation_token: string; code: string }):
+    Promise<{ enabled: true; backup_codes: string[] }>;
+  unenrollWithCookie(req: Request, options: { code: string }): Promise<{ enabled: false }>;
 }
 interface SomewhereRuntimeAuth {
   signup(options: SomewhereAuthSignupOptions): Promise<SomewhereAuthIssuedSession>;
@@ -486,14 +530,31 @@ interface SomewhereRuntimeAuth {
   // Email change is verify-gated: sends a code, never writes the address immediately.
   updateProfile(token: string, options: SomewhereAuthEmailChangeRequest): Promise<SomewhereAuthEmailChangeStarted>;
   updateProfileWithCookie(req: Request, options: SomewhereAuthProfileUpdate): Promise<{ user: SomewhereAuthUpdatedUser }>;
+  updateProfileWithCookie(req: Request, options: SomewhereAuthEmailChangeRequest): Promise<{ email_change: SomewhereAuthEmailChange }>;
+  // Email change steps for the request's own session: change_id is email_change.id, code the 6-digit emailed code.
+  verifyEmailChangeCurrentWithCookie(req: Request, options: { change_id: string; code: string }): Promise<SomewhereAuthVerificationSent>;
+  verifyEmailChangeWithCookie(req: Request, options: { change_id: string; code: string }): Promise<{ changed: true; email: string }>;
+  // Email verification for the request's own session (cookie or Bearer); no token in app code.
+  requestEmailVerificationWithCookie(req: Request): Promise<SomewhereAuthVerificationSent>;
+  verifyEmailWithCookie(req: Request, options: { code: string }): Promise<{ verified: true }>;
   deleteUser(token: string): Promise<{ deleted: true }>;
-  googleUrl(options: { redirect_uri: string }): string;
-  githubUrl(options: { redirect_uri: string }): string;
-  discordUrl(options: { redirect_uri: string }): string;
+  // Password change and account deletion end every session of the account; these clear the cookies.
+  updatePasswordWithCookie(req: Request, options: { new_password: string; current_password?: string }): Promise<{ updated: true }>;
+  deleteUserWithCookie(req: Request): Promise<{ deleted: true }>;
+  // Start Google/GitHub/Discord sign-in from a server handler: stages this attempt's HttpOnly
+  // verifier cookie on the response and resolves the provider start URL (only its challenge travels).
+  oauthStart(provider: 'google' | 'github' | 'discord', options: { redirect_uri: string }): Promise<string>;
+  /** @deprecated Always throws OAUTH_START_REQUIRES_BINDING: sign-in is bound to the browser that starts it. Use: Response.redirect(await sw.auth.oauthStart('google', { redirect_uri }), 302). The parameter stays assignable so apps on older SDK types still typecheck. */
+  googleUrl(options: { redirect_uri: string }): never;
+  /** @deprecated Always throws OAUTH_START_REQUIRES_BINDING: sign-in is bound to the browser that starts it. Use: Response.redirect(await sw.auth.oauthStart('github', { redirect_uri }), 302). The parameter stays assignable so apps on older SDK types still typecheck. */
+  githubUrl(options: { redirect_uri: string }): never;
+  /** @deprecated Always throws OAUTH_START_REQUIRES_BINDING: sign-in is bound to the browser that starts it. Use: Response.redirect(await sw.auth.oauthStart('discord', { redirect_uri }), 302). The parameter stays assignable so apps on older SDK types still typecheck. */
+  discordUrl(options: { redirect_uri: string }): never;
   googleExchange(options: { code: string; redirect_uri?: string }): Promise<SomewhereAuthGoogleSession>;
   githubExchange(options: { code: string }): Promise<SomewhereAuthOAuthSession>;
   discordExchange(options: { code: string }): Promise<SomewhereAuthOAuthSession>;
-  // Reads ?code, exchanges it, stages the session cookies, returns a 302 to redirectTo (default '/').
+  // Reads ?code, exchanges it with this browser's oauthStart verifier, stages the session cookies,
+  // clears that attempt, returns a 302 to redirectTo (default '/').
   googleCallbackWithCookie(req: Request, redirectTo?: string): Promise<Response>;
   githubCallbackWithCookie(req: Request, redirectTo?: string): Promise<Response>;
   discordCallbackWithCookie(req: Request, redirectTo?: string): Promise<Response>;
@@ -504,6 +565,14 @@ interface SomewhereRuntimeAuth {
   logoutWithCookie(req: Request): Promise<{ ok: true }>;
   signInWithOtp(options: { email: string; redirect_uri?: string }): Promise<SomewhereAuthOtpSent>;
   verifyOtp(options: { token: string }): Promise<SomewhereAuthOtpSession>;
+  // One invite email; the link signs the invitee in as the invited address.
+  invite(options: SomewhereAuthInviteOptions): Promise<SomewhereAuthInviteSent>;
+  listInvites(options?: { status?: SomewhereAuthInviteStatus; email?: string; limit?: number }): Promise<SomewhereAuthInvite[]>;
+  getInvite(id: string): Promise<SomewhereAuthInvite | null>;
+  revokeInvite(id: string): Promise<SomewhereAuthInvite>;
+  // The accepted invite, only for the signed-in account that accepted it;
+  // otherwise throws INVITE_NOT_ACCEPTED_BY_YOU (403) or AUTH_REQUIRED (401).
+  getAcceptedInvite(req: Request, id: string): Promise<SomewhereAuthInvite>;
   anonSession(): Promise<SomewhereAuthAnonSession>;
   readonly moderation: SomewhereRuntimeAuthModeration;
 }
@@ -632,6 +701,7 @@ type SomewherePaymentsStatus =
   };
 interface SomewherePaymentsLineItem { price?: string; amount?: number; currency?: string; name?: string; quantity?: number }
 interface SomewherePaymentsCheckoutOptions {
+  row?: never;
   env?: SomewherePaymentsEnv;
   mode?: 'payment' | 'subscription';
   line_items?: readonly SomewherePaymentsLineItem[];
@@ -645,6 +715,44 @@ interface SomewherePaymentsCheckoutOptions {
   customer_email?: string;
   metadata?: Readonly<Record<string, string>>;
 }
+/** Row checkout is a live, one-time payment; amounts are integer cents and items use one currency. */
+interface SomewherePaymentsRowCheckoutLineItem {
+  name: string;
+  amount: number;
+  currency: string;
+  quantity?: number;
+  price?: never;
+}
+interface SomewherePaymentsRowCheckoutOptions {
+  row: { binding: string; id: string | number };
+  env?: 'prod';
+  mode?: 'payment';
+  line_items: readonly SomewherePaymentsRowCheckoutLineItem[];
+  success_url: string;
+  cancel_url: string;
+  customer_email?: string;
+  metadata?: never;
+  quote_id?: never;
+  booking_id?: never;
+  calendar_hold_token?: never;
+  plan?: never;
+}
+interface SomewherePaymentsRowCheckoutSessionResult {
+  binding_id: string;
+  session_id: string;
+  url: string | null;
+  reused: boolean;
+  stripe_mode: 'live';
+  amount_total_cents: number;
+  currency: string;
+}
+/** A pending result has no checkout URL; reconciliation_required:true needs operator reconciliation. */
+interface SomewherePaymentsRowCheckoutPendingResult {
+  binding_id: string;
+  status: 'pending';
+  reconciliation_required: boolean;
+}
+type SomewherePaymentsRowCheckoutResult = SomewherePaymentsRowCheckoutSessionResult | SomewherePaymentsRowCheckoutPendingResult;
 interface SomewherePaymentsCheckoutForUserOptions extends SomewherePaymentsCheckoutOptions { plan: string }
 interface SomewherePaymentsCheckoutResult {
   session_id: string;
@@ -733,6 +841,7 @@ interface SomewhereRuntimePayments {
   onboard(opts?: SomewherePaymentsOnboardOptions | null): Promise<SomewherePaymentsOnboardResult>;
   quote: SomewhereQuoteFunction;
   status(opts?: { refresh?: boolean } | null): Promise<SomewherePaymentsStatus>;
+  checkout(opts: SomewherePaymentsRowCheckoutOptions): Promise<SomewherePaymentsRowCheckoutResult>;
   checkout(opts: SomewherePaymentsCheckoutOptions): Promise<SomewherePaymentsCheckoutResult>;
   // The app user is the request's verified principal; no user id argument.
   checkoutForUser(opts: SomewherePaymentsCheckoutForUserOptions): Promise<SomewherePaymentsCheckoutResult>;
@@ -877,6 +986,8 @@ interface SomewhereCalendarPolicyInput {
   advance_notice_hours?: number | null;
   bookable_from?: SomewhereCalendarInstant | null;
   turnaround_hours?: number | null;
+  // Seats per exact [start, end) class slot. Omitted or null: one reservation per overlapping range.
+  capacity?: number | null;
 }
 type SomewhereCalendarSetPolicyOptions = { resource: string } & ({ policy: SomewhereCalendarPolicyInput } | (SomewhereCalendarPolicyInput & { policy?: never }));
 interface SomewhereCalendarPolicy {
@@ -886,6 +997,7 @@ interface SomewhereCalendarPolicy {
   advance_notice_hours: number | null;
   bookable_from_ms: number | null;
   turnaround_hours: number | null;
+  capacity: number | null;
   created_at: number | null;
   updated_at: number | null;
 }
@@ -901,6 +1013,10 @@ interface SomewhereCalendarAvailabilityResult {
     expires_at: number | null;
   }[];
   free: { start_ms: number; end_ms: number }[];
+  // null for an exclusive resource.
+  capacity: number | null;
+  // Existing class slots overlapping the range (full ones included); not a schedule.
+  slots: { start_ms: number; end_ms: number; capacity: number; reserved: number; remaining: number }[];
 }
 interface SomewhereCalendarListExtras {
   range?: SomewhereCalendarReadRange | null;
@@ -1386,6 +1502,20 @@ interface SomewhereRuntimeContext {
 // ---- sw.ai ----
 type SomewhereAiProvider = 'anthropic' | 'openai' | 'xai' | 'workers-ai' | 'deepseek' | 'deepinfra';
 interface SomewhereAiInputBlock { type: string; [key: string]: unknown }
+/** Native Anthropic image input. Encode file bytes without a data: URL prefix. */
+interface SomewhereAiImageInputBlock extends SomewhereAiInputBlock {
+  type: 'image';
+  source: {
+    type: 'base64';
+    media_type: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+    data: string;
+  };
+}
+/** Native Anthropic PDF input for one-shot extraction. */
+interface SomewhereAiDocumentInputBlock extends SomewhereAiInputBlock {
+  type: 'document';
+  source: { type: 'base64'; media_type: 'application/pdf'; data: string };
+}
 interface SomewhereAiMessage {
   role: 'user' | 'assistant' | 'system';
   content: string | readonly SomewhereAiInputBlock[];
@@ -1453,6 +1583,7 @@ interface SomewhereAiChatResult {
 interface __SomewhereAiChatFn {
   (options: SomewhereAiChatOptions & { stream: true }): Promise<ReadableStream<Uint8Array>>;
   (options: SomewhereAiChatOptions & { stream?: false }): Promise<SomewhereAiChatResult>;
+  /** `stream` typed as plain boolean, e.g. `const o = { messages, stream: false }` (false widens to boolean): narrow the result with `instanceof ReadableStream`, or write `stream: false as const`. */
   (options: SomewhereAiChatOptions): Promise<SomewhereAiChatResult | ReadableStream<Uint8Array>>;
 }
 interface SomewhereAiConversationSummary {
@@ -1537,7 +1668,13 @@ interface SomewhereAiUserMemory {
   clear(): Promise<{ cleared: true }>;
   compact(schema: SomewhereJsonObject, options?: SomewhereAiUserMemoryCompactOptions): Promise<SomewhereJsonObject>;
 }
-type SomewhereAiTranscribeOptions = { model?: string } & (
+type SomewhereAiTranscribeOptions = {
+  model?: string;
+  /** Spoken language hint for the default transcription model, e.g. 'en'. */
+  language?: string;
+  /** Names, vocabulary or context for the default transcription model. */
+  prompt?: string;
+} & (
   | { audio: string; audio_url?: string }
   | { audio?: string; audio_url: string }
 );
@@ -1574,9 +1711,16 @@ interface SomewhereAiGenerateImageOptions {
   width?: number;
   height?: number;
   steps?: number;
+  // gpt-image-2.5-flare only; refused on other models.
+  quality?: 'low' | 'medium' | 'high';
+  background?: 'auto' | 'opaque' | 'transparent';
   storage?: string;
 }
-interface SomewhereAiGenerateImageStored extends __SomewhereAiStoredFile { width: number; height: number; steps: number }
+interface SomewhereAiGenerateImageStored extends __SomewhereAiStoredFile {
+  width: number; height: number; steps: number;
+  quality?: 'low' | 'medium' | 'high';
+  background?: 'auto' | 'opaque' | 'transparent';
+}
 interface SomewhereAiRemoveBackgroundOptions { image_url: string; model?: string; storage?: string }
 type SomewhereAiEmbeddingsOptions = {
   model?: string;
@@ -2147,17 +2291,91 @@ interface SomewhereRuntimeNotifications {
 interface SomewherePushSendOptions {
   // Required: a string or any JSON-serializable value.
   payload: string | number | boolean | object;
-  // Neither user_id nor endpoint: broadcast to every subscription in the project.
+  // Exactly one target; a missing, null or empty one is refused.
   user_id?: string;
   userId?: string;
   endpoint?: string;
+  subscription_id?: string;
+  subscriptionId?: string;
+  // 'developer': devices registered with developer credentials. 'all': every device.
+  audience?: 'developer' | 'all';
   ttl?: number;
 }
-interface SomewherePushSendResult { sent: number; failed: number; gone: number; recipients: number }
-// subscribe / unsubscribe are withdrawn in functions (always throw PUSH_SUBSCRIBE_UNAVAILABLE) and are not declared.
+type SomewherePushPlatform = 'web' | 'test';
+type SomewherePushDeliveryOutcome = 'sent' | 'failed' | 'gone' | 'captured';
+interface SomewherePushDeviceResult {
+  delivery_id: string;
+  subscription_id: string;
+  user_id: string | null;
+  platform: SomewherePushPlatform;
+  device_label: string | null;
+  endpoint_host: string | null;
+  outcome: SomewherePushDeliveryOutcome;
+  http_status: number | null;
+  error: string | null;
+}
+interface SomewherePushSendResult {
+  sent: number; failed: number; gone: number; captured: number; recipients: number;
+  // false: the notifications went out but their history was not recorded.
+  history_recorded: boolean;
+  devices: SomewherePushDeviceResult[];
+}
+// The object PushManager.subscribe() returns, or its toJSON().
+interface SomewherePushBrowserSubscription {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+}
+interface SomewherePushSubscribeResult {
+  id: string; platform: SomewherePushPlatform; owner: 'app_user' | 'developer';
+  created: boolean; reassigned?: boolean;
+}
+interface SomewherePushDevice {
+  // 'legacy': stored before owners were verified; no send reaches it until it re-registers.
+  id: string; user_id: string | null; owner: 'app_user' | 'developer' | 'legacy';
+  platform: SomewherePushPlatform; device_label: string | null; endpoint_host: string | null;
+  created_at: string; updated_at: string | null;
+}
+interface SomewherePushDelivery {
+  id: string; subscription_id: string; user_id: string | null; platform: SomewherePushPlatform;
+  device_label: string | null; endpoint_host: string | null; outcome: SomewherePushDeliveryOutcome;
+  http_status: number | null; error: string | null; title: string | null; url: string | null;
+  // Present on test-inbox deliveries only.
+  payload?: unknown;
+  created_at: string;
+}
+interface SomewherePushHistoryOptions {
+  user_id?: string;
+  userId?: string;
+  subscription_id?: string;
+  subscriptionId?: string;
+  limit?: number;
+}
 interface SomewhereRuntimePush {
   vapidPublicKey(): Promise<{ vapid_public_key: string }>;
+  // Registers a device for the signed-in user of this request (AUTH_REQUIRED without one).
+  subscribe(
+    subscription: SomewherePushBrowserSubscription | { toJSON(): SomewherePushBrowserSubscription } | { test: true },
+    options?: { label?: string },
+  ): Promise<SomewherePushSubscribeResult>;
+  unsubscribe(target: string | { endpoint: string } | { test: true }): Promise<{ deleted: boolean }>;
   send(options: SomewherePushSendOptions): Promise<SomewherePushSendResult>;
+  subscriptions(options?: { user_id?: string; userId?: string; limit?: number }): Promise<{ subscriptions: SomewherePushDevice[] }>;
+  deliveries(options?: SomewherePushHistoryOptions): Promise<{ deliveries: SomewherePushDelivery[] }>;
+}
+
+// The push browser helper (tsk_80c0ed92). The compiler maps this specifier to
+// the same-origin /__sw/push/client.js the project origin serves.
+declare module 'somewhere:push' {
+  export interface PushDeviceResult {
+    endpoint?: string; id: string; platform: 'web' | 'test'; owner: 'app_user' | 'developer';
+    created: boolean; reassigned?: boolean;
+  }
+  export interface PushStatus { supported: boolean; permission: NotificationPermission | 'unsupported'; subscribed: boolean; endpoint: string | null }
+  export interface PushMessage { type: 'push' | 'click'; payload: unknown }
+  export function enablePush(options?: { test?: boolean; label?: string }): Promise<PushDeviceResult>;
+  export function disablePush(options?: { test?: boolean }): Promise<{ deleted: boolean }>;
+  export function pushStatus(): Promise<PushStatus>;
+  export function listenToPush(handler: (message: PushMessage) => void): () => void;
 }
 
 // ── sw.queue / sw.jobs ─────────────────────────────────────────────
@@ -2183,7 +2401,13 @@ interface SomewhereJobsCreateOptions {
   priority?: 'normal' | 'low';
   // Generated per call when omitted.
   idempotency_key?: string;
+  // Earliest start: an ISO-8601 time with an explicit offset, e.g. '2026-10-05T09:00:00Z'. Must be in the future.
+  run_at?: string;
   agent?: { messages: readonly unknown[]; max_steps?: number; max_turns?: number; deployment_version?: string };
+  // Row-bound job: acts for the signed-in user on ONE row of a job binding declared in db/schema.ts, with only that
+  // binding's operations, until its deadline. id is the row's id(): a whole number, or a string for uuid ids.
+  // Created only from that user's own request (not from another job); not combined with agent.
+  row?: { binding: string; id: number | string };
 }
 interface SomewhereJobsRecovery {
   dispatch_state: string;
@@ -2199,6 +2423,8 @@ interface SomewhereJobsCreateResult {
   recovery: SomewhereJobsRecovery | null;
   ownership_status?: 'app_user' | 'project_owner';
   owner_subject_id?: string | null;
+  // ISO time when run_at was given; status is 'scheduled' until then.
+  run_at?: string | null;
 }
 interface SomewhereJob {
   job_id: string;
@@ -2225,11 +2451,20 @@ interface SomewhereJob {
   cron_id: string | null;
   cron_scheduled_at: string | null;
   trigger: 'scheduled' | 'manual' | null;
+  run_at: string | null;
   recovery: SomewhereJobsRecovery | null;
+}
+interface SomewhereJobsCancelResult {
+  job_id: string;
+  status: 'cancelled';
+  ownership_status: 'app_user' | 'project_owner';
+  owner_subject_id: string | null;
 }
 interface SomewhereRuntimeJobs {
   create(options: SomewhereJobsCreateOptions): Promise<SomewhereJobsCreateResult>;
   status(jobId: string): Promise<SomewhereJob>;
+  // Cancels queued work. An ordinary handler already running finishes; its side effects remain.
+  cancel(jobId: string): Promise<SomewhereJobsCancelResult>;
   // True only for a platform-signed job/queue/cron delivery; never throws.
   verifyInvocation(req: Request): Promise<boolean>;
 }
@@ -2408,6 +2643,123 @@ interface __SomewhereTypedRequest<Input> extends Request { json(): Promise<Input
 type ServerFunction<Contract extends { input: unknown; output: unknown }> =
   (req: __SomewhereTypedRequest<Contract["input"]>, sw: SomewhereRuntimeContext) =>
     Contract["output"] | Promise<Contract["output"]>;
+
+// Outbound WebSocket client: fetch(url, { headers: { Upgrade: 'websocket' } })
+// returns the upgraded socket on the response (null on any other response),
+// and the function calls accept() before using it. The runtime fetch wrapper
+// and the pinned egress transport both hand that response through
+// (worker/src/runtime/fetch.ts, routes/code-egress.ts). Merged into lib.dom.
+interface Response { readonly webSocket: WebSocket | null }
+interface WebSocket { accept(): void }
+
+type SomewhereGroupRole = "owner" | "admin" | "member";
+type SomewhereAppRole = never;
+
+interface SomewhereGroup {
+  id: string;
+  name: string;
+  created_by: string;
+  created_at: number;
+  updated_at: number;
+  /** The signed-in user's role in this group. */
+  role: SomewhereGroupRole;
+}
+
+interface SomewhereGroupMember {
+  user_id: string;
+  role: SomewhereGroupRole;
+  created_at: number;
+}
+
+/** The group plus the FIRST roster page; continue with members(req, id, { cursor: members_next_cursor }). */
+interface SomewhereGroupDetail extends SomewhereGroup {
+  members: SomewhereGroupMember[];
+  members_next_cursor: string | null;
+}
+
+/** One keyset page; next_cursor is null when nothing follows. No total count. */
+interface SomewhereGroupsPage<T> {
+  items: T[];
+  next_cursor: string | null;
+}
+
+/** limit 1–100 (default 50); cursor is a previous page's next_cursor. */
+interface SomewhereGroupsPageOptions {
+  cursor?: string;
+  limit?: number;
+}
+
+interface SomewhereAppRoleGrant {
+  user_id: string;
+  role: SomewhereAppRole;
+  granted_by: string;
+  grant_source: 'platform_admin' | 'delegation';
+  created_at: number;
+}
+
+/** A sent group invitation: one email; acceptance completes the membership. */
+interface SomewhereGroupInvitation {
+  invite: { id: string; email: string; status: 'pending'; redirect_uri: string; expires_at: number; created_at: number };
+  group: { group_id: string; role: SomewhereGroupRole };
+  delivery: 'sent' | 'pending';
+}
+
+/**
+ * Where an accepted invitation's membership stands. pending: not confirmed
+ * yet (the platform retries on this user's next list); refused: it will not
+ * complete (code says why, e.g. INVITATION_REVOKED, INVITATION_AUTHORITY_LOST).
+ */
+interface SomewhereGroupInvitationOutcome {
+  invite_id: string;
+  group_id: string;
+  role: SomewhereGroupRole;
+  state: 'completed' | 'pending' | 'refused';
+  code?: string;
+}
+
+/** Expected refusals and unconfirmed outcomes resolve with retry:false; changes are never re-sent. */
+interface SomewhereGroupsError {
+  code: string;
+  message: string;
+  status: number;
+  retry: false;
+  data?: Record<string, unknown>;
+}
+
+type SomewhereGroupsResult<T> = { data: T; error: null } | { data: null; error: SomewhereGroupsError };
+
+/**
+ * Every method acts as the user signed in on the request this function was
+ * invoked with, read once from that original request. The `req` argument is
+ * accepted for compatibility and never read: passing another Request cannot
+ * change who acts, and no method accepts an acting user. Groups are available
+ * on the live app only; a preview, a dev run, a job delivery or a signed-out
+ * request resolves with data:null and a non-retryable error before any change.
+ */
+interface SomewhereGroups {
+  create(req: Request, input: { name: string }): Promise<SomewhereGroupsResult<SomewhereGroupDetail>>;
+  /** Also completes (and reports) up to 3 of the signed-in user's accepted invitations. */
+  list(req: Request, opts?: SomewhereGroupsPageOptions): Promise<SomewhereGroupsResult<SomewhereGroupsPage<SomewhereGroup> & { invitations: SomewhereGroupInvitationOutcome[] }>>;
+  get(req: Request, groupId: string): Promise<SomewhereGroupsResult<SomewhereGroupDetail>>;
+  members(req: Request, groupId: string, opts?: SomewhereGroupsPageOptions): Promise<SomewhereGroupsResult<SomewhereGroupsPage<SomewhereGroupMember>>>;
+  /** Invite by email with a role the signed-in user may grant. The platform
+   *  sends one email and adds the member when they accept; no app call is needed. */
+  invite(req: Request, groupId: string, input: { email: string; role: SomewhereGroupRole; redirect_uri: string; expires_in?: number }): Promise<SomewhereGroupsResult<SomewhereGroupInvitation>>;
+  /** Revoke in the invitation's own group, as its sender or a member who may grant its role. */
+  revokeInvitation(req: Request, inviteId: string): Promise<SomewhereGroupsResult<{ revoked: true }>>;
+  leave(req: Request, groupId: string): Promise<SomewhereGroupsResult<{ left: true }>>;
+  remove(req: Request, groupId: string, userId: string): Promise<SomewhereGroupsResult<{ removed: true }>>;
+  setRole(req: Request, groupId: string, userId: string, role: SomewhereGroupRole): Promise<SomewhereGroupsResult<{ user_id: string; role: SomewhereGroupRole }>>;
+  appRoles: {
+    list(req: Request, userId?: string, opts?: SomewhereGroupsPageOptions): Promise<SomewhereGroupsResult<SomewhereGroupsPage<SomewhereAppRoleGrant>>>;
+    grant(req: Request, userId: string, role: SomewhereAppRole): Promise<SomewhereGroupsResult<SomewhereAppRoleGrant>>;
+    revoke(req: Request, userId: string, role: SomewhereAppRole): Promise<SomewhereGroupsResult<{ revoked: boolean }>>;
+  };
+}
+
+interface SomewhereRuntimeContext {
+  readonly groups: SomewhereGroups;
+}
 
 interface SomewhereEndpointUser {
   id: string;
