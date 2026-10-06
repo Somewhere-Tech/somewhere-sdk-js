@@ -11,6 +11,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { somewhereAuth } from '@somewhere-tech/sdk/server';
+import { createSomewhereAuth } from '@somewhere-tech/sdk/auth';
 
 const ORIGIN = 'https://app.somewhere.site';
 const PROVIDERS = ['google', 'github', 'discord'];
@@ -65,14 +66,18 @@ for (const provider of PROVIDERS) {
     assert.deepEqual(p.calls, [], 'the old unbound URL builders are never used as a fallback');
   });
 
-  test(`${provider}: the exchange route keeps its shape`, async () => {
+  test(`${provider}: the exchange forwards the code and its public attempt id`, async () => {
     const p = platform();
-    const res = await somewhereAuth(new Request(ORIGIN + `/api/auth/${provider}`, {
+    const post = (body) => somewhereAuth(new Request(ORIGIN + `/api/auth/${provider}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Origin: ORIGIN, 'X-Sw-Auth-Mode': 'header' },
-      body: JSON.stringify({ code: 'final-code' }),
+      body: JSON.stringify(body),
     }), p.sw);
-    assert.equal(res.status, 200);
-    assert.deepEqual(p.calls, [[`${provider}Exchange`, { code: 'final-code' }]]);
+    assert.equal((await post({ code: 'final-code', attempt: 'AbCdEfGhIjKlMnOp' })).status, 200);
+    await post({ code: 'final-code' });
+    assert.deepEqual(p.calls, [
+      [`${provider}Exchange`, { code: 'final-code', attempt: 'AbCdEfGhIjKlMnOp' }],
+      [`${provider}Exchange`, { code: 'final-code', attempt: '' }],
+    ], 'the attempt is selection only; a missing one is forwarded empty and the runtime refuses it');
   });
 }
 
@@ -89,4 +94,29 @@ test('only GET starts a sign-in', async () => {
   const res = await somewhereAuth(new Request(ORIGIN + '/api/auth/google-url', { method: 'POST', headers: { Origin: ORIGIN } }), p.sw);
   assert.equal(res.status, 404);
   assert.deepEqual(p.calls, []);
+});
+
+test('the client posts the callback attempt: explicit, or read from the callback page URL', async () => {
+  const bodies = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => {
+    const req = input instanceof Request ? input : new Request(String(input), init);
+    bodies.push([new URL(req.url).pathname, await req.clone().json()]);
+    return Response.json({ user: { id: 'u1', email: 'a@x.test' }, cookie_session: true });
+  };
+  try {
+    const auth = createSomewhereAuth({ baseUrl: ORIGIN, mode: 'cookie' });
+    await auth.completeGithubSignIn({ code: 'c1', attempt: 'AbCdEfGhIjKlMnOp' });
+    globalThis.window = { location: { href: `${ORIGIN}/auth/callback?code=c2&attempt=QrStUvWxYz012345` } };
+    await auth.completeGoogleSignIn({ code: 'c2' });
+    await auth.completeDiscordSignIn({ code: 'c3' });
+  } finally {
+    delete globalThis.window;
+    globalThis.fetch = realFetch;
+  }
+  assert.deepEqual(bodies, [
+    ['/api/auth/github', { code: 'c1', attempt: 'AbCdEfGhIjKlMnOp' }],
+    ['/api/auth/google', { code: 'c2', attempt: 'QrStUvWxYz012345' }],
+    ['/api/auth/discord', { code: 'c3', attempt: 'QrStUvWxYz012345' }],
+  ]);
 });

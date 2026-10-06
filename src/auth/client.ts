@@ -238,16 +238,19 @@ export interface SomewhereAuth {
   verifyEmail(input: { code: string }): Promise<void>;
   /** Get the platform-owned Google OAuth URL (no Google project needed). */
   googleSignInUrl(input?: { redirectUri?: string }): Promise<string>;
-  /** Exchange a Google `?code=` (from the callback) for a session. */
-  completeGoogleSignIn(input: { code: string }): Promise<User>;
+  /** Exchange a Google `?code=` (from the callback) for a session. Pass the
+   *  callback's `?attempt=` too; on the callback page it is read from the URL. */
+  completeGoogleSignIn(input: { code: string; attempt?: string }): Promise<User>;
   /** Get the platform-owned GitHub OAuth URL. */
   githubSignInUrl(input?: { redirectUri?: string }): Promise<string>;
-  /** Exchange a GitHub `?code=` (from the callback) for a session. */
-  completeGithubSignIn(input: { code: string }): Promise<User>;
+  /** Exchange a GitHub `?code=` (from the callback) for a session. Pass the
+   *  callback's `?attempt=` too; on the callback page it is read from the URL. */
+  completeGithubSignIn(input: { code: string; attempt?: string }): Promise<User>;
   /** Get the platform-owned Discord OAuth URL. */
   discordSignInUrl(input?: { redirectUri?: string }): Promise<string>;
-  /** Exchange a Discord `?code=` (from the callback) for a session. */
-  completeDiscordSignIn(input: { code: string }): Promise<User>;
+  /** Exchange a Discord `?code=` (from the callback) for a session. Pass the
+   *  callback's `?attempt=` too; on the callback page it is read from the URL. */
+  completeDiscordSignIn(input: { code: string; attempt?: string }): Promise<User>;
   signOut(): Promise<void>;
   /** Re-fetch the current user from the backend (validates + refreshes). */
   getUser(): Promise<User | null>;
@@ -274,6 +277,16 @@ interface TokenResponse {
 }
 
 /** undefined → 30000; anything else must be 1..2147483647 ms (setTimeout's range). */
+/** The social callback's public attempt id: passed explicitly, or read from the
+ *  callback page's own URL. It only selects which of this browser's attempt
+ *  cookies the server presents; the platform proves it before the code counts. */
+function oauthAttempt(input: { attempt?: string }): { attempt?: string } {
+  if (typeof input.attempt === 'string') return { attempt: input.attempt };
+  if (typeof window === 'undefined') return {};
+  const fromUrl = new URL(window.location.href).searchParams.get('attempt');
+  return fromUrl ? { attempt: fromUrl } : {};
+}
+
 function mutationTimeout(value: unknown): number {
   if (value === undefined) return 30_000;
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 2_147_483_647) {
@@ -746,7 +759,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       if (!u) throw new AuthError('Could not get the Google sign-in URL.', res.status);
       return u;
     },
-    completeGoogleSignIn: (i) => postForSession('/google', { code: i.code }),
+    completeGoogleSignIn: (i) => postForSession('/google', { code: i.code, ...oauthAttempt(i) }),
     githubSignInUrl: async (i) => {
       const res = await fetch(url(`/github-url${i?.redirectUri ? `?redirect_uri=${encodeURIComponent(i.redirectUri)}` : ''}`));
       const b = (await res.json().catch(() => ({}))) as { url?: string; data?: { url?: string } };
@@ -754,7 +767,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       if (!u) throw new AuthError('Could not get the GitHub sign-in URL.', res.status);
       return u;
     },
-    completeGithubSignIn: (i) => postForSession('/github', { code: i.code }),
+    completeGithubSignIn: (i) => postForSession('/github', { code: i.code, ...oauthAttempt(i) }),
     discordSignInUrl: async (i) => {
       const res = await fetch(url(`/discord-url${i?.redirectUri ? `?redirect_uri=${encodeURIComponent(i.redirectUri)}` : ''}`));
       const b = (await res.json().catch(() => ({}))) as { url?: string; data?: { url?: string } };
@@ -762,7 +775,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       if (!u) throw new AuthError('Could not get the Discord sign-in URL.', res.status);
       return u;
     },
-    completeDiscordSignIn: (i) => postForSession('/discord', { code: i.code }),
+    completeDiscordSignIn: (i) => postForSession('/discord', { code: i.code, ...oauthAttempt(i) }),
     signOut: () => {
       // An owed sign-out is retried with the header session it was for.
       const had = session ?? owedSignOut?.session ?? null;

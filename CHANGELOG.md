@@ -17,6 +17,12 @@ last feature/breaking bump), the **minor** version is the breaking lever until
 - A runtime without `oauthStart` answers `501 OAUTH_START_UNAVAILABLE` (redeploy
   to pick up the current runtime) instead of starting an unbound sign-in. The
   old `googleUrl` / `githubUrl` / `discordUrl` builders are never called.
+- The sign-in callback carries a public `?attempt=` beside `?code=`.
+  `completeGoogleSignIn` / `completeGithubSignIn` / `completeDiscordSignIn`
+  send it (read from the callback page URL when not passed) and the handler
+  forwards it to the runtime exchange. It only selects which of this
+  browser's attempt cookies the server presents; the platform proves the full
+  challenge before the code counts.
 
 ## 0.11.6 (2026-10-04) — email verification for cookie sessions
 

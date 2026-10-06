@@ -42,6 +42,9 @@ export interface SwAuthNamespace {
     ): Promise<unknown>;
     logout(opts: Record<string, unknown>): Promise<unknown>;
     fromRequest(req: Request, enrich?: unknown): Promise<unknown>;
+    /** Exchanges take the callback's ?code= and its public ?attempt=, which
+     *  selects this browser's attempt cookie; the runtime presents only that
+     *  original request cookie and the platform proves it before spending. */
     /** Start browser-bound social sign-in: stages this attempt's HttpOnly
      *  verifier cookie on the response and resolves the provider start URL.
      *  Optional so the handler answers 501 on a runtime that predates it. The
@@ -49,9 +52,9 @@ export interface SwAuthNamespace {
      *  current runtimes refuse them, so a current runtime context must satisfy
      *  this type without them. */
     oauthStart?(provider: 'google' | 'github' | 'discord', opts: { redirect_uri: string }): Promise<string>;
-    googleExchange(opts: { code: string }): Promise<unknown>;
-    githubExchange(opts: { code: string }): Promise<unknown>;
-    discordExchange(opts: { code: string }): Promise<unknown>;
+    googleExchange(opts: { code: string; attempt?: string }): Promise<unknown>;
+    githubExchange(opts: { code: string; attempt?: string }): Promise<unknown>;
+    discordExchange(opts: { code: string; attempt?: string }): Promise<unknown>;
     signInWithOtp(opts: { email: string; redirect_uri?: string }): Promise<unknown>;
     verifyOtp(opts: { token: string }): Promise<unknown>;
     /** Cookie-session primitives (tsk_1dd4e1b4) — optional so the handler
@@ -378,17 +381,17 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
     }
     if (method === 'POST' && sub === '/google') {
       const b = await readBody();
-      const d = await sw.auth.googleExchange({ code: String(b.code ?? '') });
+      const d = await sw.auth.googleExchange({ code: String(b.code ?? ''), attempt: String(b.attempt ?? '') });
       return sessionResponse(d);
     }
     if (method === 'POST' && sub === '/github') {
       const b = await readBody();
-      const d = await sw.auth.githubExchange({ code: String(b.code ?? '') });
+      const d = await sw.auth.githubExchange({ code: String(b.code ?? ''), attempt: String(b.attempt ?? '') });
       return sessionResponse(d);
     }
     if (method === 'POST' && sub === '/discord') {
       const b = await readBody();
-      const d = await sw.auth.discordExchange({ code: String(b.code ?? '') });
+      const d = await sw.auth.discordExchange({ code: String(b.code ?? ''), attempt: String(b.attempt ?? '') });
       return sessionResponse(d);
     }
     return json({ error: 'NOT_FOUND', message: `No @somewhere-tech/sdk/auth route for ${method} ${sub}` }, 404);
