@@ -44,16 +44,13 @@ export interface SwAuthNamespace {
     fromRequest(req: Request, enrich?: unknown): Promise<unknown>;
     /** Start browser-bound social sign-in: stages this attempt's HttpOnly
      *  verifier cookie on the response and resolves the provider start URL.
-     *  Optional so the handler answers 501 on a runtime that predates it. */
+     *  Optional so the handler answers 501 on a runtime that predates it. The
+     *  old googleUrl/githubUrl/discordUrl builders are not part of this slice:
+     *  current runtimes refuse them, so a current runtime context must satisfy
+     *  this type without them. */
     oauthStart?(provider: 'google' | 'github' | 'discord', opts: { redirect_uri: string }): Promise<string>;
-    /** @deprecated Refused by current runtimes; social sign-in starts with oauthStart. Never called by this handler. */
-    googleUrl?(opts: { redirect_uri: string }): string | Promise<unknown>;
     googleExchange(opts: { code: string }): Promise<unknown>;
-    /** @deprecated Refused by current runtimes; social sign-in starts with oauthStart. Never called by this handler. */
-    githubUrl?(opts: { redirect_uri: string }): string | Promise<unknown>;
     githubExchange(opts: { code: string }): Promise<unknown>;
-    /** @deprecated Refused by current runtimes; social sign-in starts with oauthStart. Never called by this handler. */
-    discordUrl?(opts: { redirect_uri: string }): string | Promise<unknown>;
     discordExchange(opts: { code: string }): Promise<unknown>;
     signInWithOtp(opts: { email: string; redirect_uri?: string }): Promise<unknown>;
     verifyOtp(opts: { token: string }): Promise<unknown>;
